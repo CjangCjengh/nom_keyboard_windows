@@ -24,8 +24,8 @@ BOOL RegisterServer() {
         CoTaskMemFree(pszCLSID);
         return FALSE;
     }
-    RegSetValueExW(hKey, NULL, 0, REG_SZ, (const BYTE*)TEXTSERVICE_DESC,
-        (DWORD)(wcslen(TEXTSERVICE_DESC) + 1) * sizeof(wchar_t));
+    RegSetValueExW(hKey, NULL, 0, REG_SZ, (const BYTE*)TEXTSERVICE_DESC_EN,
+        (DWORD)(wcslen(TEXTSERVICE_DESC_EN) + 1) * sizeof(wchar_t));
 
     HKEY hSubKey = nullptr;
     if (RegCreateKeyExW(hKey, c_szInProcSvr32, 0, NULL,

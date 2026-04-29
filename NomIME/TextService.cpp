@@ -47,8 +47,9 @@ public:
                 ITfInsertAtSelection* pInsert = nullptr;
                 if (SUCCEEDED(context_->QueryInterface(IID_ITfInsertAtSelection, (void**)&pInsert))) {
                     ITfRange* pRange = nullptr;
-                    if (SUCCEEDED(pInsert->InsertTextAtSelection(ec, TF_IAS_QUERYONLY,
-                        NULL, 0, &pRange))) {
+                    // Use empty insert (not QUERYONLY) so any selected text is replaced
+                    if (SUCCEEDED(pInsert->InsertTextAtSelection(ec, 0,
+                        L"", 0, &pRange))) {
                         ITfContextComposition* pContextComp = nullptr;
                         if (SUCCEEDED(context_->QueryInterface(IID_ITfContextComposition,
                             (void**)&pContextComp))) {
@@ -582,33 +583,65 @@ void NomTextService::OnEscape(ITfContext* pContext) {
 void NomTextService::OnNumber(ITfContext* pContext, int num) {
     int idx = candidatePage_ * MAX_CANDIDATES_DISPLAY + num - 1;
     if (idx < 0 || idx >= (int)currentCandidates_.size()) return;
-    CommitCandidate(idx);
 
-    std::wstring text = lockedPrefix_ + currentCandidates_[idx];
+    std::wstring picked = currentCandidates_[idx];
+    int consumed = (idx < (int)currentCandidateConsumed_.size()) ? currentCandidateConsumed_[idx] : 1;
+    BumpRecent(picked);
 
-    // Clear state and commit
-    std::wstring commitText = text;
-    BumpRecent(currentCandidates_[idx]);
+    // Split composing into syllables
+    auto syllables = StringUtil::SplitWhitespace(composing_);
+    int totalSyl = (int)syllables.size();
+    if (totalSyl == 0) totalSyl = 1;
+    int k = (std::min)(consumed, totalSyl);
 
-    composing_.clear();
-    lockedPrefix_.clear();
-    currentCandidates_.clear();
-    currentCandidateConsumed_.clear();
-    candidatePage_ = 0;
-    shorthandActive_ = false;
-    shorthandSegments_.clear();
-    if (candidateWindow_) candidateWindow_->Hide();
+    if (k >= totalSyl) {
+        // Final pick: candidate covers all remaining syllables
+        std::wstring commitText = lockedPrefix_ + picked;
+        composing_.clear();
+        lockedPrefix_.clear();
+        currentCandidates_.clear();
+        currentCandidateConsumed_.clear();
+        candidatePage_ = 0;
+        shorthandActive_ = false;
+        shorthandSegments_.clear();
+        if (candidateWindow_) candidateWindow_->Hide();
 
-    EditSession* pSession = new EditSession(this, pContext,
-        EditSession::COMMIT_TEXT, commitText);
-    HRESULT hr;
-    pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
-    pSession->Release();
+        EditSession* pSession = new EditSession(this, pContext,
+            EditSession::COMMIT_TEXT, commitText);
+        HRESULT hr;
+        pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+        pSession->Release();
+    } else {
+        // Partial pick: consume first k syllables, keep the rest
+        lockedPrefix_ += picked;
+
+        // Rebuild composing from remaining syllables
+        std::wstring remaining;
+        for (int i = k; i < (int)syllables.size(); i++) {
+            if (!remaining.empty()) remaining += L' ';
+            remaining += syllables[i];
+        }
+        composing_ = remaining;
+
+        // Refresh candidates for the remaining syllables
+        UpdateCandidates();
+
+        // Update the composing text shown in the editor
+        std::wstring display;
+        if (lockedPrefix_.empty()) display = composing_;
+        else if (composing_.empty()) display = lockedPrefix_;
+        else display = lockedPrefix_ + L" " + composing_;
+
+        EditSession* pSession = new EditSession(this, pContext,
+            EditSession::SET_COMPOSING, display);
+        HRESULT hr;
+        pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+        pSession->Release();
+    }
 }
 
 void NomTextService::CommitCandidate(int index) {
-    if (index < 0 || index >= (int)currentCandidates_.size()) return;
-    // For now simple commit - advanced segment picking can be added later
+    // Handled inline in OnNumber now
 }
 
 void NomTextService::CommitComposing(ITfContext* pContext) {

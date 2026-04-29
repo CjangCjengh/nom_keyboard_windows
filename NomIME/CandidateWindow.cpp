@@ -1,24 +1,22 @@
-// CandidateWindow.cpp — Candidate window implementation (Win10/11 Pinyin style)
+// CandidateWindow.cpp — Horizontal candidate bar (Win10/11 Pinyin style)
 #include "CandidateWindow.h"
 #include "TextService.h"
 #include <dwmapi.h>
-#include <uxtheme.h>
 
 const wchar_t* CandidateWindow::WINDOW_CLASS_NAME = L"NomIME_CandidateWindow";
 bool CandidateWindow::classRegistered_ = false;
 
 CandidateWindow::CandidateWindow(NomTextService* pService)
-    : service_(pService), hwnd_(nullptr), currentPage_(0), totalPages_(0)
+    : service_(pService), hwnd_(nullptr), currentPage_(0), totalPages_(0),
+      totalWidth_(0), totalHeight_(0)
 {
+    rcPrev_ = rcNext_ = { 0,0,0,0 };
 }
 
-CandidateWindow::~CandidateWindow() {
-    Destroy();
-}
+CandidateWindow::~CandidateWindow() { Destroy(); }
 
 BOOL CandidateWindow::RegisterWindowClass() {
     if (classRegistered_) return TRUE;
-
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(WNDCLASSEXW);
     wc.style = CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW;
@@ -27,84 +25,31 @@ BOOL CandidateWindow::RegisterWindowClass() {
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = nullptr;
     wc.lpszClassName = WINDOW_CLASS_NAME;
-
-    if (RegisterClassExW(&wc)) {
-        classRegistered_ = true;
-        return TRUE;
-    }
+    if (RegisterClassExW(&wc)) { classRegistered_ = true; return TRUE; }
     return FALSE;
 }
 
 BOOL CandidateWindow::Create(HWND hParent) {
     if (!RegisterWindowClass()) return FALSE;
-
     hwnd_ = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-        WINDOW_CLASS_NAME,
-        L"",
-        WS_POPUP,
-        0, 0, MIN_WIDTH, 100,
-        hParent,
-        NULL,
-        g_hInst,
-        this
-    );
-
+        WINDOW_CLASS_NAME, L"", WS_POPUP,
+        0, 0, 100, 40, hParent, NULL, g_hInst, this);
     if (!hwnd_) return FALSE;
-
-    // Enable rounded corners on Windows 11
-    // DWM_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND (value 2)
-    DWORD cornerPref = 2; // DWMWCP_ROUND
-    DwmSetWindowAttribute(hwnd_, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/,
-        &cornerPref, sizeof(cornerPref));
-
-    // Set dark/light border color
-    BOOL darkMode = FALSE;
-    DWORD borderColor = 0x00CCCCCC; // light gray border
-    DwmSetWindowAttribute(hwnd_, 34 /*DWMWA_BORDER_COLOR*/,
-        &borderColor, sizeof(borderColor));
-
+    DWORD corner = 2;
+    DwmSetWindowAttribute(hwnd_, 33, &corner, sizeof(corner));
     return TRUE;
 }
 
 void CandidateWindow::Destroy() {
-    if (hwnd_) {
-        DestroyWindow(hwnd_);
-        hwnd_ = nullptr;
-    }
+    if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
 }
 
 void CandidateWindow::Show() {
-    if (!hwnd_) {
-        Create(NULL);
-    }
+    if (!hwnd_) Create(NULL);
     if (hwnd_ && !candidates_.empty()) {
-        // Calculate window size
-        int itemCount = (std::min)((int)candidates_.size() - currentPage_ * MAX_CANDIDATES_DISPLAY,
-                                   MAX_CANDIDATES_DISPLAY);
-        int height = PADDING * 2 + COMPOSING_HEIGHT + itemCount * ITEM_HEIGHT + (totalPages_ > 1 ? 24 : 0);
-        int width = MIN_WIDTH;
-
-        // Measure text widths
-        HDC hdc = GetDC(hwnd_);
-        HFONT hFont = CreateFontW(FONT_SIZE, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
-        HFONT hOld = (HFONT)SelectObject(hdc, hFont);
-
-        for (int i = 0; i < itemCount; i++) {
-            int idx = currentPage_ * MAX_CANDIDATES_DISPLAY + i;
-            SIZE sz;
-            GetTextExtentPoint32W(hdc, candidates_[idx].c_str(), (int)candidates_[idx].size(), &sz);
-            int itemWidth = NUMBER_WIDTH + sz.cx + PADDING * 4;
-            if (itemWidth > width) width = itemWidth;
-        }
-
-        SelectObject(hdc, hOld);
-        DeleteObject(hFont);
-        ReleaseDC(hwnd_, hdc);
-
-        SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, width, height,
+        RecalcLayout();
+        SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, totalWidth_, totalHeight_,
             SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         ShowWindow(hwnd_, SW_SHOWNA);
         InvalidateRect(hwnd_, NULL, TRUE);
@@ -112,9 +57,7 @@ void CandidateWindow::Show() {
 }
 
 void CandidateWindow::Hide() {
-    if (hwnd_) {
-        ShowWindow(hwnd_, SW_HIDE);
-    }
+    if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
 }
 
 BOOL CandidateWindow::IsVisible() const {
@@ -122,228 +65,231 @@ BOOL CandidateWindow::IsVisible() const {
 }
 
 void CandidateWindow::MoveTo(int x, int y) {
-    if (hwnd_) {
-        // Make sure the window stays on screen
-        RECT rcWork;
-        SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
-        RECT rc;
-        GetWindowRect(hwnd_, &rc);
-        int w = rc.right - rc.left;
-        int h = rc.bottom - rc.top;
-        if (x + w > rcWork.right) x = rcWork.right - w;
-        if (y + h > rcWork.bottom) y = rcWork.bottom - h - 30;
-        if (x < rcWork.left) x = rcWork.left;
-        if (y < rcWork.top) y = rcWork.top;
-        SetWindowPos(hwnd_, HWND_TOPMOST, x, y, 0, 0,
-            SWP_NOSIZE | SWP_NOACTIVATE);
-    }
+    if (!hwnd_) return;
+    RECT rcWork;
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
+    if (x + totalWidth_ > rcWork.right) x = rcWork.right - totalWidth_;
+    if (y + totalHeight_ > rcWork.bottom) y = rcWork.bottom - totalHeight_ - 30;
+    if (x < rcWork.left) x = rcWork.left;
+    if (y < rcWork.top) y = rcWork.top;
+    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 void CandidateWindow::SetCandidates(const std::vector<std::wstring>& candidates, int page) {
     candidates_ = candidates;
     currentPage_ = page;
     totalPages_ = ((int)candidates.size() + MAX_CANDIDATES_DISPLAY - 1) / MAX_CANDIDATES_DISPLAY;
-    if (hwnd_) InvalidateRect(hwnd_, NULL, TRUE);
+    if (hwnd_) { RecalcLayout(); InvalidateRect(hwnd_, NULL, TRUE); }
 }
 
 void CandidateWindow::SetComposing(const std::wstring& composing) {
     composingText_ = composing;
-    if (hwnd_) InvalidateRect(hwnd_, NULL, TRUE);
+    // No visual update — composing text is shown in the editor, not the candidate bar
 }
 
 void CandidateWindow::NextPage() {
-    if (currentPage_ < totalPages_ - 1) {
-        currentPage_++;
-        if (hwnd_) InvalidateRect(hwnd_, NULL, TRUE);
-    }
+    if (currentPage_ < totalPages_ - 1) { currentPage_++; if (hwnd_) { RecalcLayout(); InvalidateRect(hwnd_, NULL, TRUE); } }
+}
+void CandidateWindow::PrevPage() {
+    if (currentPage_ > 0) { currentPage_--; if (hwnd_) { RecalcLayout(); InvalidateRect(hwnd_, NULL, TRUE); } }
 }
 
-void CandidateWindow::PrevPage() {
-    if (currentPage_ > 0) {
-        currentPage_--;
-        if (hwnd_) InvalidateRect(hwnd_, NULL, TRUE);
+void CandidateWindow::RecalcLayout() {
+    if (!hwnd_) return;
+    HDC hdc = GetDC(hwnd_);
+
+    HFONT hCandFont = CreateFontW(CAND_FONT_SIZE, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+    HFONT hNumFont = CreateFontW(NUM_FONT_SIZE, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+    HFONT hOld = (HFONT)SelectObject(hdc, hCandFont);
+
+    itemRects_.clear();
+    int startIdx = currentPage_ * MAX_CANDIDATES_DISPLAY;
+    int endIdx = (std::min)(startIdx + MAX_CANDIDATES_DISPLAY, (int)candidates_.size());
+
+    int x = EDGE_PAD;
+    int y = EDGE_PAD;
+
+    for (int i = startIdx; i < endIdx; i++) {
+        int num = i - startIdx + 1;
+
+        // Measure number width
+        wchar_t numStr[4];
+        swprintf_s(numStr, L"%d", num);
+        SelectObject(hdc, hNumFont);
+        SIZE szNum;
+        GetTextExtentPoint32W(hdc, numStr, (int)wcslen(numStr), &szNum);
+
+        // Measure candidate text width
+        SelectObject(hdc, hCandFont);
+        SIZE szText;
+        GetTextExtentPoint32W(hdc, candidates_[i].c_str(), (int)candidates_[i].size(), &szText);
+
+        int itemW = szNum.cx + ITEM_INNER_PAD + szText.cx + ITEM_GAP;
+        ItemRect ir;
+        ir.rc = { x, y, x + itemW, y + ROW_HEIGHT };
+        ir.index = i;
+        itemRects_.push_back(ir);
+        x += itemW;
     }
+
+    // Page nav
+    if (totalPages_ > 1) {
+        rcPrev_ = { x + 4, y, x + 4 + NAV_BTN_W, y + ROW_HEIGHT };
+        x += 4 + NAV_BTN_W;
+        rcNext_ = { x + 2, y, x + 2 + NAV_BTN_W, y + ROW_HEIGHT };
+        x += 2 + NAV_BTN_W;
+    } else {
+        rcPrev_ = rcNext_ = { 0,0,0,0 };
+    }
+
+    x += EDGE_PAD;
+    totalWidth_ = x;
+    totalHeight_ = y + ROW_HEIGHT + EDGE_PAD;
+
+    SelectObject(hdc, hOld);
+    DeleteObject(hCandFont);
+    DeleteObject(hNumFont);
+    ReleaseDC(hwnd_, hdc);
 }
 
 LRESULT CALLBACK CandidateWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     CandidateWindow* pWnd = nullptr;
-
     if (msg == WM_NCCREATE) {
-        LPCREATESTRUCT lpcs = reinterpret_cast<LPCREATESTRUCT>(lParam);
+        auto lpcs = reinterpret_cast<LPCREATESTRUCT>(lParam);
         pWnd = reinterpret_cast<CandidateWindow*>(lpcs->lpCreateParams);
         SetWindowLongPtrW(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pWnd));
     } else {
         pWnd = reinterpret_cast<CandidateWindow*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
     }
-
     switch (msg) {
-    case WM_PAINT:
-        if (pWnd) pWnd->OnPaint();
-        return 0;
-
-    case WM_LBUTTONDOWN:
-        if (pWnd) pWnd->OnMouseDown(LOWORD(lParam), HIWORD(lParam));
-        return 0;
-
-    case WM_ERASEBKGND:
-        return 1;
+    case WM_PAINT:       if (pWnd) pWnd->OnPaint(); return 0;
+    case WM_LBUTTONDOWN: if (pWnd) pWnd->OnMouseDown(LOWORD(lParam), HIWORD(lParam)); return 0;
+    case WM_ERASEBKGND:  return 1;
     }
-
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
 void CandidateWindow::OnPaint() {
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(hwnd_, &ps);
-
     RECT rc;
     GetClientRect(hwnd_, &rc);
 
-    // Double buffer
     HDC hdcMem = CreateCompatibleDC(hdc);
     HBITMAP hbm = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
     HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, hbm);
 
-    // Background: white with slight transparency (Win10/11 style)
-    HBRUSH hBgBrush = CreateSolidBrush(RGB(252, 252, 252));
-    FillRect(hdcMem, &rc, hBgBrush);
-    DeleteObject(hBgBrush);
+    // White background
+    HBRUSH hBg = CreateSolidBrush(RGB(255, 255, 255));
+    FillRect(hdcMem, &rc, hBg);
+    DeleteObject(hBg);
 
-    // Border
-    HPEN hPen = CreatePen(PS_SOLID, 1, RGB(204, 204, 204));
-    HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPen);
-    HBRUSH hNullBrush = (HBRUSH)GetStockObject(NULL_BRUSH);
-    SelectObject(hdcMem, hNullBrush);
-    RoundRect(hdcMem, 0, 0, rc.right, rc.bottom, CORNER_RADIUS * 2, CORNER_RADIUS * 2);
+    // Thin border
+    HPEN hBorder = CreatePen(PS_SOLID, 1, RGB(200, 200, 200));
+    HPEN hOldPen = (HPEN)SelectObject(hdcMem, hBorder);
+    SelectObject(hdcMem, (HBRUSH)GetStockObject(NULL_BRUSH));
+    Rectangle(hdcMem, 0, 0, rc.right, rc.bottom);
     SelectObject(hdcMem, hOldPen);
-    DeleteObject(hPen);
+    DeleteObject(hBorder);
 
-    // Fonts
-    HFONT hMainFont = CreateFontW(FONT_SIZE, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    HFONT hCandFont = CreateFontW(CAND_FONT_SIZE, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
-    HFONT hNumFont = CreateFontW(NUMBER_FONT_SIZE, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
-    HFONT hComposingFont = CreateFontW(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    HFONT hNumFont = CreateFontW(NUM_FONT_SIZE, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
 
     SetBkMode(hdcMem, TRANSPARENT);
-    int y = PADDING;
 
-    // Composing text (top area with light blue background)
-    if (!composingText_.empty()) {
-        RECT rcComp = { PADDING, y, rc.right - PADDING, y + COMPOSING_HEIGHT };
-        HBRUSH hCompBg = CreateSolidBrush(RGB(240, 244, 249));
-        FillRect(hdcMem, &rcComp, hCompBg);
-        DeleteObject(hCompBg);
+    for (size_t i = 0; i < itemRects_.size(); i++) {
+        auto& ir = itemRects_[i];
+        int num = (int)(i + 1);
+        int idx = ir.index;
 
-        HFONT hOldFont = (HFONT)SelectObject(hdcMem, hComposingFont);
-        SetTextColor(hdcMem, RGB(60, 60, 60));
-        DrawTextW(hdcMem, composingText_.c_str(), (int)composingText_.size(),
-            &rcComp, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        SelectObject(hdcMem, hOldFont);
-        y += COMPOSING_HEIGHT + 2;
-    }
-
-    // Separator line
-    HPEN hSepPen = CreatePen(PS_SOLID, 1, RGB(230, 230, 230));
-    SelectObject(hdcMem, hSepPen);
-    MoveToEx(hdcMem, PADDING, y, NULL);
-    LineTo(hdcMem, rc.right - PADDING, y);
-    DeleteObject(hSepPen);
-    y += 2;
-
-    // Candidate items
-    int startIdx = currentPage_ * MAX_CANDIDATES_DISPLAY;
-    int endIdx = (std::min)(startIdx + MAX_CANDIDATES_DISPLAY, (int)candidates_.size());
-
-    for (int i = startIdx; i < endIdx; i++) {
-        int num = i - startIdx + 1;
-        RECT rcItem = { PADDING, y, rc.right - PADDING, y + ITEM_HEIGHT };
-
-        // Hover effect (can be enhanced with mouse tracking)
+        // Highlight first item
+        if (i == 0) {
+            HBRUSH hHL = CreateSolidBrush(RGB(204, 232, 255));
+            FillRect(hdcMem, &ir.rc, hHL);
+            DeleteObject(hHL);
+        }
 
         // Number label
-        RECT rcNum = { PADDING + 4, y, PADDING + NUMBER_WIDTH, y + ITEM_HEIGHT };
-        HFONT hOldFont = (HFONT)SelectObject(hdcMem, hNumFont);
-        SetTextColor(hdcMem, RGB(0, 90, 158)); // Win10 accent blue
         wchar_t numStr[4];
         swprintf_s(numStr, L"%d", num);
-        DrawTextW(hdcMem, numStr, -1, &rcNum,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        HFONT hPrev = (HFONT)SelectObject(hdcMem, hNumFont);
+        SetTextColor(hdcMem, RGB(140, 140, 140));
+        SIZE szNum;
+        GetTextExtentPoint32W(hdcMem, numStr, (int)wcslen(numStr), &szNum);
+        RECT rcNum = ir.rc;
+        rcNum.right = rcNum.left + szNum.cx + 2;
+        DrawTextW(hdcMem, numStr, -1, &rcNum, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-        // Candidate text
-        SelectObject(hdcMem, hMainFont);
-        SetTextColor(hdcMem, RGB(30, 30, 30));
-        RECT rcText = { PADDING + NUMBER_WIDTH + 8, y,
-                        rc.right - PADDING, y + ITEM_HEIGHT };
-        DrawTextW(hdcMem, candidates_[i].c_str(), (int)candidates_[i].size(),
+        // Candidate character
+        SelectObject(hdcMem, hCandFont);
+        SetTextColor(hdcMem, RGB(0, 0, 0));
+        RECT rcText = ir.rc;
+        rcText.left = rcNum.right + ITEM_INNER_PAD;
+        DrawTextW(hdcMem, candidates_[idx].c_str(), (int)candidates_[idx].size(),
             &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
-        SelectObject(hdcMem, hOldFont);
-        y += ITEM_HEIGHT;
+        SelectObject(hdcMem, hPrev);
     }
 
-    // Page indicator
+    // Page nav arrows
     if (totalPages_ > 1) {
-        y += 2;
-        HFONT hOldFont = (HFONT)SelectObject(hdcMem, hNumFont);
+        HFONT hPrev = (HFONT)SelectObject(hdcMem, hNumFont);
         SetTextColor(hdcMem, RGB(120, 120, 120));
-        wchar_t pageStr[32];
-        swprintf_s(pageStr, L"< %d / %d >", currentPage_ + 1, totalPages_);
-        RECT rcPage = { PADDING, y, rc.right - PADDING, y + 20 };
-        DrawTextW(hdcMem, pageStr, -1, &rcPage,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        SelectObject(hdcMem, hOldFont);
+        DrawTextW(hdcMem, L"\x25C0", 1, &rcPrev_, DT_CENTER | DT_VCENTER | DT_SINGLELINE); // ◀
+        DrawTextW(hdcMem, L"\x25B6", 1, &rcNext_, DT_CENTER | DT_VCENTER | DT_SINGLELINE); // ▶
+        SelectObject(hdcMem, hPrev);
     }
 
-    // Cleanup fonts
-    DeleteObject(hMainFont);
+    DeleteObject(hCandFont);
     DeleteObject(hNumFont);
-    DeleteObject(hComposingFont);
 
-    // Blit to screen
     BitBlt(hdc, 0, 0, rc.right, rc.bottom, hdcMem, 0, 0, SRCCOPY);
     SelectObject(hdcMem, hbmOld);
     DeleteObject(hbm);
     DeleteDC(hdcMem);
-
     EndPaint(hwnd_, &ps);
 }
 
 void CandidateWindow::OnMouseDown(int x, int y) {
-    RECT rc;
-    GetClientRect(hwnd_, &rc);
-
-    // Determine which candidate was clicked
-    int itemY = PADDING + (composingText_.empty() ? 0 : COMPOSING_HEIGHT + 4);
-    int startIdx = currentPage_ * MAX_CANDIDATES_DISPLAY;
-    int endIdx = (std::min)(startIdx + MAX_CANDIDATES_DISPLAY, (int)candidates_.size());
-
-    for (int i = startIdx; i < endIdx; i++) {
-        if (y >= itemY && y < itemY + ITEM_HEIGHT) {
-            // Clicked on this candidate
-            if (service_) {
-                // Send the number key equivalent
-                int num = i - startIdx + 1;
-                // Post a message to the service to handle the pick
-                // For now, directly access the service
+    for (auto& ir : itemRects_) {
+        POINT pt = { x, y };
+        if (PtInRect(&ir.rc, pt)) {
+            int num = ir.index - currentPage_ * MAX_CANDIDATES_DISPLAY + 1;
+            if (service_ && num >= 1 && num <= 9) {
+                HWND hFocus = GetFocus();
+                if (hFocus) PostMessageW(hFocus, WM_KEYDOWN, '0' + num, 0);
             }
-            break;
+            return;
         }
-        itemY += ITEM_HEIGHT;
     }
-
-    // Check page navigation
     if (totalPages_ > 1) {
-        int pageY = PADDING + (composingText_.empty() ? 0 : COMPOSING_HEIGHT + 4) +
-            (endIdx - startIdx) * ITEM_HEIGHT + 4;
-        if (y >= pageY) {
-            if (x < rc.right / 2) PrevPage();
-            else NextPage();
-            InvalidateRect(hwnd_, NULL, TRUE);
-        }
+        POINT pt = { x, y };
+        if (PtInRect(&rcPrev_, pt)) { PrevPage(); Show(); return; }
+        if (PtInRect(&rcNext_, pt)) { NextPage(); Show(); return; }
     }
+}
+
+void CandidateWindow::MoveNearCaret(ITfContext* pContext) {
+    if (!pContext || !hwnd_) return;
+    POINT pt = { 0, 0 };
+    GUITHREADINFO gti = {};
+    gti.cbSize = sizeof(GUITHREADINFO);
+    if (GetGUIThreadInfo(0, &gti) && gti.hwndCaret) {
+        pt.x = gti.rcCaret.left;
+        pt.y = gti.rcCaret.bottom + 4;
+        ClientToScreen(gti.hwndCaret, &pt);
+    } else {
+        GetCaretPos(&pt);
+        HWND hFg = GetForegroundWindow();
+        if (hFg) ClientToScreen(hFg, &pt);
+        pt.y += 24;
+    }
+    MoveTo(pt.x, pt.y);
 }
