@@ -70,12 +70,17 @@ BOOL RegisterProfiles() {
     wchar_t szModule[MAX_PATH] = {};
     GetModuleFileNameW(g_hInst, szModule, MAX_PATH);
 
+    // Pick display name based on system UI language
+    LANGID uiLang = GetUserDefaultUILanguage();
+    WORD priLang = PRIMARYLANGID(uiLang);
+    const wchar_t* desc = (priLang == LANG_VIETNAMESE) ? TEXTSERVICE_DESC_VI : TEXTSERVICE_DESC_EN;
+
     hr = pProfileMgr->RegisterProfile(
         CLSID_NomTextService,
         TEXTSERVICE_LANGID,
         GUID_NomProfile,
-        TEXTSERVICE_DESC,
-        (ULONG)wcslen(TEXTSERVICE_DESC),
+        desc,
+        (ULONG)wcslen(desc),
         szModule,
         (ULONG)wcslen(szModule),
         0,      // icon index

@@ -43,9 +43,11 @@ static const GUID GUID_NomDisplayAttribute_Input =
 // Vietnamese language ID (LANGID = 0x042A, LCID for Vietnamese - Vietnam)
 static const LANGID TEXTSERVICE_LANGID = MAKELANGID(LANG_VIETNAMESE, SUBLANG_VIETNAMESE_VIETNAM);
 
-// IME name
-static const wchar_t TEXTSERVICE_DESC[]   = L"Nom Keyboard (Bàn phím Hán Nôm)";
-static const wchar_t TEXTSERVICE_MODEL[]  = L"Apartment";
+// IME display names (chosen by system language at registration time)
+static const wchar_t TEXTSERVICE_DESC_VI[] = L"B\x00e0n ph\x00edm H\x00e1n N\x00f4m";   // "Bàn phím Hán Nôm"
+static const wchar_t TEXTSERVICE_DESC_EN[] = L"Nom Keyboard";
+static const wchar_t TEXTSERVICE_DESC[]    = L"B\x00e0n ph\x00edm H\x00e1n N\x00f4m";    // fallback
+static const wchar_t TEXTSERVICE_MODEL[]   = L"Apartment";
 
 // Max candidates shown in window
 static const int MAX_CANDIDATES_DISPLAY = 9;

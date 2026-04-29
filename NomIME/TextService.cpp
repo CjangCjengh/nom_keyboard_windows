@@ -1,4 +1,4 @@
-// TextService.cpp — Main TSF Text Service implementation
+// TextService.cpp — Main TSF Text Service implementation// TextService.cpp — Main TSF Text Service implementation
 #include "TextService.h"
 #include "TelexEngine.h"
 #include "NomDictionary.h"
@@ -11,9 +11,9 @@ public:
     enum Action { SET_COMPOSING, COMMIT_TEXT, END_COMPOSITION };
 
     EditSession(NomTextService* pService, ITfContext* pContext, Action action,
-                const std::wstring& text = L"")
+        const std::wstring& text = L"")
         : refCount_(1), service_(pService), context_(pContext),
-          action_(action), text_(text)
+        action_(action), text_(text)
     {
         context_->AddRef();
     }
@@ -89,7 +89,8 @@ public:
                     SafeRelease(service_->composition_);
                     pRange->Release();
                 }
-            } else {
+            }
+            else {
                 // No composition, insert directly
                 ITfInsertAtSelection* pInsert = nullptr;
                 if (SUCCEEDED(context_->QueryInterface(IID_ITfInsertAtSelection, (void**)&pInsert))) {
@@ -123,10 +124,10 @@ private:
 
 NomTextService::NomTextService()
     : refCount_(1), clientId_(TF_CLIENTID_NULL), threadMgr_(nullptr),
-      threadMgrSinkCookie_(TF_INVALID_COOKIE), textEditSinkCookie_(TF_INVALID_COOKIE),
-      composition_(nullptr), compositionContext_(nullptr),
-      shorthandActive_(false), candidatePage_(0), candidateWindow_(nullptr),
-      toneStyleOld_(false), shorthandEnabled_(true), segmentMode_(true)
+    threadMgrSinkCookie_(TF_INVALID_COOKIE), textEditSinkCookie_(TF_INVALID_COOKIE),
+    composition_(nullptr), compositionContext_(nullptr),
+    shorthandActive_(false), candidatePage_(0), candidateWindow_(nullptr),
+    toneStyleOld_(false), shorthandEnabled_(true), segmentMode_(true)
 {
     InterlockedIncrement(&g_cRefDll);
 }
@@ -144,15 +145,20 @@ STDMETHODIMP NomTextService::QueryInterface(REFIID riid, void** ppvObj) {
     if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_ITfTextInputProcessor) ||
         IsEqualIID(riid, IID_ITfTextInputProcessorEx)) {
         *ppvObj = static_cast<ITfTextInputProcessorEx*>(this);
-    } else if (IsEqualIID(riid, IID_ITfKeyEventSink)) {
+    }
+    else if (IsEqualIID(riid, IID_ITfKeyEventSink)) {
         *ppvObj = static_cast<ITfKeyEventSink*>(this);
-    } else if (IsEqualIID(riid, IID_ITfCompositionSink)) {
+    }
+    else if (IsEqualIID(riid, IID_ITfCompositionSink)) {
         *ppvObj = static_cast<ITfCompositionSink*>(this);
-    } else if (IsEqualIID(riid, IID_ITfThreadMgrEventSink)) {
+    }
+    else if (IsEqualIID(riid, IID_ITfThreadMgrEventSink)) {
         *ppvObj = static_cast<ITfThreadMgrEventSink*>(this);
-    } else if (IsEqualIID(riid, IID_ITfTextEditSink)) {
+    }
+    else if (IsEqualIID(riid, IID_ITfTextEditSink)) {
         *ppvObj = static_cast<ITfTextEditSink*>(this);
-    } else {
+    }
+    else {
         return E_NOINTERFACE;
     }
     AddRef();
@@ -204,6 +210,10 @@ STDMETHODIMP NomTextService::ActivateEx(ITfThreadMgr* pThreadMgr, TfClientId tfC
         pSource->Release();
     }
 
+    // Create candidate window
+    candidateWindow_ = new CandidateWindow(this);
+    candidateWindow_->Create(NULL);
+
     return S_OK;
 }
 
@@ -248,6 +258,15 @@ STDMETHODIMP NomTextService::OnSetFocus(BOOL fForeground) { return S_OK; }
 STDMETHODIMP NomTextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
     *pfEaten = FALSE;
 
+    // Never eat keys when Ctrl or Alt is held — let shortcuts (Ctrl+A, Ctrl+C, Alt+F4 etc.) pass through
+    BYTE keyState[256];
+    GetKeyboardState(keyState);
+    bool ctrl = (keyState[VK_CONTROL] & 0x80) != 0;
+    bool alt = (keyState[VK_MENU] & 0x80) != 0;
+    if (ctrl || alt) {
+        return S_OK;
+    }
+
     // While composing, eat most keys
     bool hasComposition = !composing_.empty() || !lockedPrefix_.empty();
 
@@ -280,6 +299,21 @@ STDMETHODIMP NomTextService::OnTestKeyUp(ITfContext* pContext, WPARAM wParam, LP
 
 STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
     *pfEaten = FALSE;
+
+    // Never eat keys when Ctrl or Alt is held — let shortcuts pass through
+    BYTE keyState[256];
+    GetKeyboardState(keyState);
+    bool ctrl = (keyState[VK_CONTROL] & 0x80) != 0;
+    bool alt = (keyState[VK_MENU] & 0x80) != 0;
+    if (ctrl || alt) {
+        // If composing, commit first so Ctrl+A selects committed text
+        bool hasComp = !composing_.empty() || !lockedPrefix_.empty();
+        if (hasComp) {
+            CommitComposing(pContext);
+        }
+        return S_OK;
+    }
+
     bool hasComposition = !composing_.empty() || !lockedPrefix_.empty();
 
     // Handle backspace
@@ -379,7 +413,7 @@ STDMETHODIMP NomTextService::OnPopContext(ITfContext* pContext) { return S_OK; }
 // ---- ITfTextEditSink ----
 
 STDMETHODIMP NomTextService::OnEndEdit(ITfContext* pContext, TfEditCookie ecReadOnly,
-                                        ITfEditRecord* pEditRecord) {
+    ITfEditRecord* pEditRecord) {
     return S_OK;
 }
 
@@ -388,7 +422,8 @@ STDMETHODIMP NomTextService::OnEndEdit(ITfContext* pContext, TfEditCookie ecRead
 void NomTextService::OnChar(ITfContext* pContext, wchar_t ch) {
     if (shorthandActive_) {
         composing_ += ch;
-    } else {
+    }
+    else {
         size_t lastSpace = composing_.rfind(L' ');
         std::wstring head = (lastSpace != std::wstring::npos) ? composing_.substr(0, lastSpace + 1) : L"";
         std::wstring tail = (lastSpace != std::wstring::npos) ? composing_.substr(lastSpace + 1) : composing_;
@@ -414,7 +449,8 @@ void NomTextService::OnChar(ITfContext* pContext, wchar_t ch) {
 void NomTextService::OnBackspace(ITfContext* pContext) {
     if (!composing_.empty()) {
         composing_.pop_back();
-    } else if (!lockedPrefix_.empty()) {
+    }
+    else if (!lockedPrefix_.empty()) {
         // Undo last locked character
         lockedPrefix_.pop_back();
     }
@@ -550,7 +586,8 @@ void NomTextService::CommitComposing(ITfContext* pContext) {
         HRESULT hr;
         pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
         pSession->Release();
-    } else {
+    }
+    else {
         EditSession* pSession = new EditSession(this, pContext,
             EditSession::COMMIT_TEXT, text);
         HRESULT hr;
@@ -671,7 +708,8 @@ void NomTextService::UpdateCandidates() {
                 currentCandidateConsumed_.push_back(1);
             }
         }
-    } else if (segmentMode_ && composing_.find(L' ') != std::wstring::npos) {
+    }
+    else if (segmentMode_ && composing_.find(L' ') != std::wstring::npos) {
         // Segment mode with multiple syllables
         auto syllables = StringUtil::SplitWhitespace(composing_);
         currentCandidates_.clear();
@@ -704,7 +742,8 @@ void NomTextService::UpdateCandidates() {
                 }
             }
         }
-    } else {
+    }
+    else {
         // Simple lookup
         std::wstring trimmed = StringUtil::Trim(composing_);
         currentCandidates_ = dict.Lookup(trimmed);
@@ -728,7 +767,7 @@ void NomTextService::UpdateCandidates() {
             it = recentCounts_.find(currentCandidates_[b]);
             if (it != recentCounts_.end()) rb = it->second;
             return ra > rb;
-        });
+            });
 
         std::vector<std::wstring> sorted;
         std::vector<int> sortedConsumed;
@@ -743,10 +782,42 @@ void NomTextService::UpdateCandidates() {
     candidatePage_ = 0;
 
     // Update candidate window
-    if (candidateWindow_ && !currentCandidates_.empty()) {
+    if (!currentCandidates_.empty()) {
+        // Ensure window exists
+        if (!candidateWindow_) {
+            candidateWindow_ = new CandidateWindow(this);
+            candidateWindow_->Create(NULL);
+        }
+
+        // Build composing display for the candidate bar
+        std::wstring composingDisplay;
+        if (lockedPrefix_.empty()) composingDisplay = composing_;
+        else if (composing_.empty()) composingDisplay = lockedPrefix_;
+        else composingDisplay = lockedPrefix_ + L" " + composing_;
+        candidateWindow_->SetComposing(composingDisplay);
+
         candidateWindow_->SetCandidates(currentCandidates_, candidatePage_);
+
+        // Position near the system caret
+        POINT pt = { 0, 0 };
+        GUITHREADINFO gti = {};
+        gti.cbSize = sizeof(GUITHREADINFO);
+        if (GetGUIThreadInfo(0, &gti) && gti.hwndCaret) {
+            pt.x = gti.rcCaret.left;
+            pt.y = gti.rcCaret.bottom + 4;
+            ClientToScreen(gti.hwndCaret, &pt);
+        }
+        else {
+            // Fallback: use GetCaretPos
+            GetCaretPos(&pt);
+            HWND hFg = GetForegroundWindow();
+            if (hFg) ClientToScreen(hFg, &pt);
+            pt.y += 24;
+        }
+        candidateWindow_->MoveTo(pt.x, pt.y);
         candidateWindow_->Show();
-    } else if (candidateWindow_) {
+    }
+    else if (candidateWindow_) {
         candidateWindow_->Hide();
     }
 }
@@ -816,7 +887,8 @@ void NomTextService::LoadRecentCounts() {
             try {
                 int v = std::stoi(parts[1]);
                 if (!parts[0].empty()) recentCounts_[parts[0]] = v;
-            } catch (...) {}
+            }
+            catch (...) {}
         }
     }
 }
