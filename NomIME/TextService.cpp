@@ -1,5 +1,6 @@
-// TextService.cpp — Main TSF Text Service implementation// TextService.cpp — Main TSF Text Service implementation
+// TextService.cpp — Main TSF Text Service implementation
 #include "TextService.h"
+#include "CandidateWindow.h"
 #include "TelexEngine.h"
 #include "NomDictionary.h"
 #include "UserDictionary.h"
@@ -269,6 +270,12 @@ STDMETHODIMP NomTextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, 
     // Ctrl/Alt/Win combos: pass through without committing (e.g. Win+Shift+S screenshot)
     if (ctrl || alt || win) return S_OK;
 
+    // Page Up/Down: eat when candidates are showing (for page navigation)
+    if ((wParam == VK_PRIOR || wParam == VK_NEXT) && !currentCandidates_.empty()) {
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
     // Function keys, navigation, modifier-only keys: always pass through
     if ((wParam >= VK_F1 && wParam <= VK_F24) ||
         wParam == VK_PRINT || wParam == VK_SNAPSHOT ||
@@ -326,6 +333,16 @@ STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPAR
 
     // Win key combos (Win+Shift+S, Win+V, etc.): pass through WITHOUT committing
     if (win) return S_OK;
+
+    // Page Up/Down for candidate page navigation
+    if ((wParam == VK_PRIOR || wParam == VK_NEXT) && !currentCandidates_.empty() && candidateWindow_) {
+        if (wParam == VK_PRIOR) candidateWindow_->PrevPage();
+        else candidateWindow_->NextPage();
+        candidatePage_ = candidateWindow_->GetCurrentPage();
+        candidateWindow_->Show();
+        *pfEaten = TRUE;
+        return S_OK;
+    }
 
     // Function keys, navigation, modifier-only: pass through without committing
     if ((wParam >= VK_F1 && wParam <= VK_F24) ||
@@ -791,7 +808,7 @@ void NomTextService::UpdateCandidates() {
                 if (i > 0) prefix += L' ';
                 prefix += syllables[i];
             }
-            auto results = (k > 1) ? dict.LookupWord(prefix) : dict.LookupSingle(prefix);
+            auto results = (k > 1) ? dict.LookupWord(prefix, true) : dict.LookupSingle(prefix, true);
             for (auto& v : results) {
                 bool found = false;
                 for (auto& c : currentCandidates_) if (c == v) { found = true; break; }
@@ -801,7 +818,7 @@ void NomTextService::UpdateCandidates() {
                 }
             }
             if (k == 1) {
-                auto singles = dict.LookupSingle(prefix);
+                auto singles = dict.LookupSingle(prefix, true);
                 for (auto& v : singles) {
                     bool found = false;
                     for (auto& c : currentCandidates_) if (c == v) { found = true; break; }
@@ -814,9 +831,9 @@ void NomTextService::UpdateCandidates() {
         }
     }
     else {
-        // Simple lookup
+        // Simple lookup (strict mode by default)
         std::wstring trimmed = StringUtil::Trim(composing_);
-        currentCandidates_ = dict.Lookup(trimmed);
+        currentCandidates_ = dict.Lookup(trimmed, true);
         currentCandidateConsumed_.resize(currentCandidates_.size());
         for (int i = 0; i < (int)currentCandidateConsumed_.size(); i++) {
             currentCandidateConsumed_[i] = 1;
