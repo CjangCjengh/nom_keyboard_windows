@@ -75,6 +75,18 @@ private:
     };
     ShorthandSegments TryShorthandSplit(const std::wstring& raw) const;
 
+    // Segment-mode pick history (for auto-learning)
+    struct LockedStep {
+        std::wstring rawConsumed;  // Vietnamese syllables consumed
+        std::wstring nomText;      // Nom characters picked
+        std::wstring learnKey;     // override reading for learning (e.g. from shorthand)
+    };
+    std::vector<LockedStep> lockedHistory_;
+
+    // Auto-learning
+    void LearnUserPhrases();
+    void ObserveNgramForCommit(const std::wstring& commitString);
+
     LONG refCount_;
     TfClientId clientId_;
     ITfThreadMgr* threadMgr_;

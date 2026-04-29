@@ -4,6 +4,7 @@
 #include "TelexEngine.h"
 #include "NomDictionary.h"
 #include "UserDictionary.h"
+#include "NgramModel.h"
 #include "StringUtil.h"
 
 // ---- EditSession: helper to perform edits inside a TSF edit cookie ----
@@ -197,6 +198,8 @@ STDMETHODIMP NomTextService::ActivateEx(ITfThreadMgr* pThreadMgr, TfClientId tfC
     std::wstring dataDir = StringUtil::GetInstallDir();
     NomDictionary::Instance().EnsureLoaded(dataDir);
     UserDictionary::Instance().EnsureLoaded();
+    NgramModel::Instance().EnsureLoaded();
+    NgramModel::Instance().SetMaxN(3);
 
     // Load preferences & recent counts
     LoadPreferences();
@@ -242,6 +245,9 @@ STDMETHODIMP NomTextService::Deactivate() {
         threadMgrSinkCookie_ = TF_INVALID_COOKIE;
     }
 
+    // Persist n-gram model
+    NgramModel::Instance().PersistNow();
+
     // Destroy candidate window
     if (candidateWindow_) {
         candidateWindow_->Destroy();
@@ -269,8 +275,8 @@ STDMETHODIMP NomTextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, 
     BYTE keyState[256];
     GetKeyboardState(keyState);
     bool ctrl = (keyState[VK_CONTROL] & 0x80) != 0;
-    bool alt = (keyState[VK_MENU] & 0x80) != 0;
-    bool win = (keyState[VK_LWIN] & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
+    bool alt  = (keyState[VK_MENU]    & 0x80) != 0;
+    bool win  = (keyState[VK_LWIN]    & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
 
     // Ctrl/Alt/Win combos: pass through without committing (e.g. Win+Shift+S screenshot)
     if (ctrl || alt || win) return S_OK;
@@ -333,8 +339,8 @@ STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPAR
     BYTE keyState[256];
     GetKeyboardState(keyState);
     bool ctrl = (keyState[VK_CONTROL] & 0x80) != 0;
-    bool alt = (keyState[VK_MENU] & 0x80) != 0;
-    bool win = (keyState[VK_LWIN] & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
+    bool alt  = (keyState[VK_MENU]    & 0x80) != 0;
+    bool win  = (keyState[VK_LWIN]    & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
 
     // Win key combos (Win+Shift+S, Win+V, etc.): pass through WITHOUT committing
     if (win) return S_OK;
@@ -469,6 +475,7 @@ STDMETHODIMP NomTextService::OnSetFocus(ITfDocumentMgr* pDocMgrFocus, ITfDocumen
     if (candidateWindow_) candidateWindow_->Hide();
     composing_.clear();
     lockedPrefix_.clear();
+    lockedHistory_.clear();
     currentCandidates_.clear();
     currentCandidateConsumed_.clear();
     candidatePage_ = 0;
@@ -603,6 +610,7 @@ void NomTextService::OnEnter(ITfContext* pContext) {
 void NomTextService::OnEscape(ITfContext* pContext) {
     composing_.clear();
     lockedPrefix_.clear();
+    lockedHistory_.clear();
     currentCandidates_.clear();
     currentCandidateConsumed_.clear();
     candidatePage_ = 0;
@@ -630,11 +638,27 @@ void NomTextService::OnNumber(ITfContext* pContext, int num) {
     if (totalSyl == 0) totalSyl = 1;
     int k = (std::min)(consumed, totalSyl);
 
+    // Record this pick step
+    std::wstring consumedRaw;
+    for (int i = 0; i < k && i < (int)syllables.size(); i++) {
+        if (!consumedRaw.empty()) consumedRaw += L' ';
+        consumedRaw += syllables[i];
+    }
+    if (consumedRaw.empty()) consumedRaw = composing_;
+    lockedHistory_.push_back({ consumedRaw, picked, L"" });
+
     if (k >= totalSyl) {
         // Final pick: candidate covers all remaining syllables
         std::wstring commitText = lockedPrefix_ + picked;
+
+        // Auto-learn from the pick history
+        LearnUserPhrases();
+        // Feed the committed Nom into the n-gram model
+        ObserveNgramForCommit(commitText);
+
         composing_.clear();
         lockedPrefix_.clear();
+        lockedHistory_.clear();
         currentCandidates_.clear();
         currentCandidateConsumed_.clear();
         candidatePage_ = 0;
@@ -647,8 +671,7 @@ void NomTextService::OnNumber(ITfContext* pContext, int num) {
         HRESULT hr;
         pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
         pSession->Release();
-    }
-    else {
+    } else {
         // Partial pick: consume first k syllables, keep the rest
         lockedPrefix_ += picked;
 
@@ -704,11 +727,13 @@ void NomTextService::CommitComposing(ITfContext* pContext) {
 
     composing_.clear();
     lockedPrefix_.clear();
+    lockedHistory_.clear();
     currentCandidates_.clear();
     currentCandidateConsumed_.clear();
     candidatePage_ = 0;
     shorthandActive_ = false;
     shorthandSegments_.clear();
+    NgramModel::Instance().ResetContext();
     if (candidateWindow_) candidateWindow_->Hide();
 }
 
@@ -851,18 +876,32 @@ void NomTextService::UpdateCandidates() {
         }
     }
     else {
-        // Simple lookup (strict mode by default)
+        // Simple lookup — single syllable: only suggest single characters (not compounds)
+        // This matches Android's pref_single_syl_single_char_only = true default.
         std::wstring trimmed = StringUtil::Trim(composing_);
-        currentCandidates_ = dict.Lookup(trimmed, true);
+        bool isSingleSyllable = (trimmed.find(L' ') == std::wstring::npos);
+        if (isSingleSyllable) {
+            // Single-char only: exact match + prefix match
+            auto exact = dict.LookupSingle(trimmed, true);
+            auto prefix = dict.LookupSinglePrefix(trimmed, 500, true);
+            currentCandidates_ = exact;
+            for (auto& s : prefix) {
+                bool found = false;
+                for (auto& c : currentCandidates_) if (c == s) { found = true; break; }
+                if (!found) currentCandidates_.push_back(s);
+            }
+        } else {
+            currentCandidates_ = dict.Lookup(trimmed, true);
+        }
         currentCandidateConsumed_.resize(currentCandidates_.size());
         for (int i = 0; i < (int)currentCandidateConsumed_.size(); i++) {
             currentCandidateConsumed_[i] = 1;
         }
     }
 
-    // Sort by recency
+    // Sort by (consumed desc, recency desc, n-gram score desc)
     if (!currentCandidates_.empty()) {
-        // Create index array and sort
+        auto& ngram = NgramModel::Instance();
         std::vector<int> indices(currentCandidates_.size());
         for (int i = 0; i < (int)indices.size(); i++) indices[i] = i;
         std::stable_sort(indices.begin(), indices.end(), [&](int a, int b) {
@@ -873,7 +912,10 @@ void NomTextService::UpdateCandidates() {
             if (it != recentCounts_.end()) ra = it->second;
             it = recentCounts_.find(currentCandidates_[b]);
             if (it != recentCounts_.end()) rb = it->second;
-            return ra > rb;
+            if (ra != rb) return ra > rb;
+            int na = ngram.Score(currentCandidates_[a]);
+            int nb = ngram.Score(currentCandidates_[b]);
+            return na > nb;
             });
 
         std::vector<std::wstring> sorted;
@@ -1019,5 +1061,95 @@ void NomTextService::LoadRecentCounts() {
             }
             catch (...) {}
         }
+    }
+}
+
+// ---- Auto-learning ----
+
+void NomTextService::LearnUserPhrases() {
+    if (lockedHistory_.empty()) return;
+
+    auto& userDict = UserDictionary::Instance();
+    auto& dict = NomDictionary::Instance();
+
+    // Build reading->nom from steps
+    auto readingOf = [](const LockedStep& step) -> std::wstring {
+        return step.learnKey.empty() ? step.rawConsumed : step.learnKey;
+    };
+
+    // Full phrase (always learn)
+    std::wstring fullKey, fullNom;
+    for (auto& step : lockedHistory_) {
+        std::wstring r = StringUtil::Trim(StringUtil::ToLower(readingOf(step)));
+        if (r.empty()) continue;
+        if (!fullKey.empty()) fullKey += L' ';
+        fullKey += r;
+        fullNom += step.nomText;
+    }
+
+    if (fullKey.empty() || fullNom.empty()) return;
+
+    // Skip if already in bundled dictionary
+    if (!dict.FindBundledKeyForNomByVietTat(fullNom, StringUtil::SplitWhitespace(
+        NomDictionary::StripDiacritics(fullKey))).empty()) {
+        return;
+    }
+
+    // Learn the full phrase
+    auto existing = userDict.LookupWord(fullKey);
+    std::vector<std::wstring> merged;
+    merged.push_back(fullNom);
+    for (auto& v : existing) {
+        if (v != fullNom) merged.push_back(v);
+    }
+    userDict.PutEntry(fullKey, merged);
+
+    // Also learn contiguous sub-phrases of length 2..N-1
+    int maxSubLen = (std::min)((int)lockedHistory_.size() - 1, 3);
+    for (int len = maxSubLen; len >= 2; len--) {
+        for (int start = 0; start + len <= (int)lockedHistory_.size(); start++) {
+            if (start == 0 && len == (int)lockedHistory_.size()) continue; // already done above
+
+            std::wstring subKey, subNom;
+            for (int i = start; i < start + len; i++) {
+                std::wstring r = StringUtil::Trim(StringUtil::ToLower(readingOf(lockedHistory_[i])));
+                if (r.empty()) { subKey.clear(); break; }
+                if (!subKey.empty()) subKey += L' ';
+                subKey += r;
+                subNom += lockedHistory_[i].nomText;
+            }
+            if (subKey.empty() || subNom.empty()) continue;
+
+            // Skip bundled entries
+            auto subSegs = StringUtil::SplitWhitespace(NomDictionary::StripDiacritics(subKey));
+            if (!dict.FindBundledKeyForNomByVietTat(subNom, subSegs).empty()) continue;
+
+            auto subExisting = userDict.LookupWord(subKey);
+            std::vector<std::wstring> subMerged;
+            subMerged.push_back(subNom);
+            for (auto& v : subExisting) {
+                if (v != subNom) subMerged.push_back(v);
+            }
+            userDict.PutEntry(subKey, subMerged);
+        }
+    }
+}
+
+void NomTextService::ObserveNgramForCommit(const std::wstring& commitString) {
+    auto& ngram = NgramModel::Instance();
+    for (size_t i = 0; i < commitString.size(); ) {
+        // Handle surrogate pairs for CJK characters outside BMP
+        wchar_t ch = commitString[i];
+        std::wstring token;
+        if (ch >= 0xD800 && ch <= 0xDBFF && i + 1 < commitString.size()) {
+            token = commitString.substr(i, 2);
+            i += 2;
+        } else {
+            token = std::wstring(1, ch);
+            i += 1;
+        }
+        // Skip whitespace
+        if (token == L" " || token == L"\t") continue;
+        ngram.Observe(token);
     }
 }

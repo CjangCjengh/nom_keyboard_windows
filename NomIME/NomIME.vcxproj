@@ -178,6 +178,7 @@
     <ClCompile Include="TelexEngine.cpp" />
     <ClCompile Include="NomDictionary.cpp" />
     <ClCompile Include="UserDictionary.cpp" />
+    <ClCompile Include="NgramModel.cpp" />
     <ClCompile Include="StringUtil.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -189,6 +190,7 @@
     <ClInclude Include="TelexEngine.h" />
     <ClInclude Include="NomDictionary.h" />
     <ClInclude Include="UserDictionary.h" />
+    <ClInclude Include="NgramModel.h" />
     <ClInclude Include="StringUtil.h" />
   </ItemGroup>
   <ItemGroup>
