@@ -1,13 +1,16 @@
 ; NomIME NSIS Installer Script
-; Generates setup.exe for Nom Keyboard (Windows IME)
+; Generates setup.exe for Nom Keyboard
 ; -------------------------------------------------------
-; Prerequisites: NSIS 3.x (https://nsis.sourceforge.io/)
-;   Install NSIS and add to PATH, then build from VS or run:
-;   makensis NomIMESetup.nsi
+; IMPORTANT: Build NomIME DLLs (Release|x64 and Release|Win32) BEFORE running this.
 
 !include "MUI2.nsh"
 !include "x64.nsh"
 !include "LogicLib.nsh"
+
+; ---- Configurable paths ----
+!ifndef SOLUTION_DIR
+    !define SOLUTION_DIR ".."
+!endif
 
 ; ---- General ----
 Name "Nom Keyboard"
@@ -26,10 +29,8 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2025 Nom Keyboard Project"
 
 ; ---- Interface Settings ----
 !define MUI_ABORTWARNING
-!define MUI_ICON "${NSISDIR}\Contrib\Graphics\Icons\modern-install.ico"
-!define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\modern-uninstall.ico"
 !define MUI_WELCOMEPAGE_TITLE "Welcome to Nom Keyboard Setup"
-!define MUI_WELCOMEPAGE_TEXT "This wizard will install Nom Keyboard - a Hán Nôm input method for Windows.$\n$\nBàn phím Nôm cho Windows - nhập chữ Nôm qua bộ gõ Telex."
+!define MUI_WELCOMEPAGE_TEXT "This wizard will install Nom Keyboard - a Han Nom input method for Windows.$\n$\nBan phim Han Nom cho Windows."
 
 ; ---- Pages ----
 !insertmacro MUI_PAGE_WELCOME
@@ -42,37 +43,27 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2025 Nom Keyboard Project"
 
 ; ---- Languages ----
 !insertmacro MUI_LANGUAGE "English"
-!insertmacro MUI_LANGUAGE "Vietnamese"
 
 ; ---- Sections ----
 
 Section "Nom Keyboard" SecMain
     SectionIn RO
-
     SetOutPath "$INSTDIR"
 
-    ; Determine architecture and copy the right DLL
-    ${If} ${RunningX64}
-        ; 64-bit system: install both 32-bit and 64-bit DLLs
-        ; The 64-bit DLL is used by 64-bit applications
-        ; The 32-bit DLL is used by 32-bit applications (WOW64)
-        File /oname=NomIME64.dll "..\bin\Release\x64\NomIME.dll"
-        File /oname=NomIME32.dll "..\bin\Release\Win32\NomIME.dll"
-    ${Else}
-        ; 32-bit system: only 32-bit DLL
-        File /oname=NomIME32.dll "..\bin\Release\Win32\NomIME.dll"
-    ${EndIf}
+    ; DLLs
+    File /oname=NomIME64.dll "${SOLUTION_DIR}\bin\Release\x64\NomIME.dll"
+    File /oname=NomIME32.dll "${SOLUTION_DIR}\bin\Release\Win32\NomIME.dll"
 
     ; Dictionary data files
-    File "..\data\nom_dict_single.tsv"
-    File "..\data\nom_dict_word.tsv"
+    File "${SOLUTION_DIR}\data\nom_dict_single.tsv"
+    File "${SOLUTION_DIR}\data\nom_dict_word.tsv"
 
     ; Write uninstaller
     WriteUninstaller "$INSTDIR\uninstall.exe"
 
     ; Registry entries for Add/Remove Programs
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard" \
-        "DisplayName" "Nom Keyboard (Bàn phím Hán Nôm)"
+        "DisplayName" "Nom Keyboard"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard" \
         "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard" \
@@ -91,10 +82,7 @@ Section "Nom Keyboard" SecMain
 
     ; Register the IME DLL(s)
     ${If} ${RunningX64}
-        ; Register 64-bit DLL
         ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\NomIME64.dll"'
-        ; Register 32-bit DLL for WOW64 apps
-        ; On 64-bit Windows, $SYSDIR is System32 (64-bit) and we need SysWOW64 for 32-bit
         ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s "$INSTDIR\NomIME32.dll"'
     ${Else}
         ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\NomIME32.dll"'
@@ -123,9 +111,6 @@ Section "Uninstall"
 
     ; Remove directory
     RMDir "$INSTDIR"
-
-    ; Remove user data (optional - commented out to preserve user dictionary)
-    ; RMDir /r "$LOCALAPPDATA\NomKeyboard"
 
     ; Remove registry entries
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard"

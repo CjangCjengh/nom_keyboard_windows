@@ -43,11 +43,27 @@
     <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <!-- Locate NSIS: check PATH, then common install dirs -->
+  <!-- Users can also set NsisDir as an environment variable or MSBuild property -->
+  <PropertyGroup>
+    <!-- Bin subdirectory first (some NSIS installers put makensis.exe there) -->
+    <NsisDir Condition="'$(NsisDir)' == '' AND Exists('C:\Program Files (x86)\NSIS\Bin\makensis.exe')">C:\Program Files (x86)\NSIS\Bin</NsisDir>
+    <NsisDir Condition="'$(NsisDir)' == '' AND Exists('C:\Program Files\NSIS\Bin\makensis.exe')">C:\Program Files\NSIS\Bin</NsisDir>
+    <NsisDir Condition="'$(NsisDir)' == '' AND Exists('D:\Program Files (x86)\NSIS\Bin\makensis.exe')">D:\Program Files (x86)\NSIS\Bin</NsisDir>
+    <NsisDir Condition="'$(NsisDir)' == '' AND Exists('D:\Program Files\NSIS\Bin\makensis.exe')">D:\Program Files\NSIS\Bin</NsisDir>
+    <!-- Root directory (classic NSIS layout) -->
+    <NsisDir Condition="'$(NsisDir)' == '' AND Exists('C:\Program Files (x86)\NSIS\makensis.exe')">C:\Program Files (x86)\NSIS</NsisDir>
+    <NsisDir Condition="'$(NsisDir)' == '' AND Exists('C:\Program Files\NSIS\makensis.exe')">C:\Program Files\NSIS</NsisDir>
+    <NsisDir Condition="'$(NsisDir)' == '' AND Exists('D:\Program Files (x86)\NSIS\makensis.exe')">D:\Program Files (x86)\NSIS</NsisDir>
+    <NsisDir Condition="'$(NsisDir)' == '' AND Exists('D:\Program Files\NSIS\makensis.exe')">D:\Program Files\NSIS</NsisDir>
+    <NsisExe Condition="'$(NsisDir)' != ''">"$(NsisDir)\makensis.exe"</NsisExe>
+    <NsisExe Condition="'$(NsisDir)' == ''">makensis</NsisExe>
+  </PropertyGroup>
   <!-- Release x64 builds the NSIS installer after both DLLs are compiled -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <NMakeBuildCommandLine>makensis "$(ProjectDir)NomIMESetup.nsi"</NMakeBuildCommandLine>
-    <NMakeCleanCommandLine>del /Q "$(ProjectDir)setup.exe" 2>nul</NMakeCleanCommandLine>
-    <NMakeReBuildCommandLine>del /Q "$(ProjectDir)setup.exe" 2>nul &amp; makensis "$(ProjectDir)NomIMESetup.nsi"</NMakeReBuildCommandLine>
+    <NMakeBuildCommandLine>cd /d "$(ProjectDir)" &amp; $(NsisExe) /V4 "$(ProjectDir)NomIMESetup.nsi" &gt; "$(ProjectDir)nsis_build.log" 2&gt;&amp;1 || (type "$(ProjectDir)nsis_build.log" &amp; exit /b 1)</NMakeBuildCommandLine>
+    <NMakeCleanCommandLine>del /Q "$(ProjectDir)setup.exe" 2&gt;nul</NMakeCleanCommandLine>
+    <NMakeReBuildCommandLine>del /Q "$(ProjectDir)setup.exe" 2&gt;nul &amp; cd /d "$(ProjectDir)" &amp; $(NsisExe) "$(ProjectDir)NomIMESetup.nsi"</NMakeReBuildCommandLine>
     <NMakeOutput>$(ProjectDir)setup.exe</NMakeOutput>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
