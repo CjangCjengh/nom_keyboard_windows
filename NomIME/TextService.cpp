@@ -48,9 +48,9 @@ public:
                 ITfInsertAtSelection* pInsert = nullptr;
                 if (SUCCEEDED(context_->QueryInterface(IID_ITfInsertAtSelection, (void**)&pInsert))) {
                     ITfRange* pRange = nullptr;
-                    // Use empty insert (not QUERYONLY) so any selected text is replaced
+                    // Insert the composing text directly (replaces any selected text)
                     if (SUCCEEDED(pInsert->InsertTextAtSelection(ec, 0,
-                        L"", 0, &pRange))) {
+                        text_.c_str(), (LONG)text_.size(), &pRange))) {
                         ITfContextComposition* pContextComp = nullptr;
                         if (SUCCEEDED(context_->QueryInterface(IID_ITfContextComposition,
                             (void**)&pContextComp))) {
@@ -58,19 +58,24 @@ public:
                                 service_, &service_->composition_);
                             pContextComp->Release();
                         }
+                        // Set cursor at end
+                        pRange->Collapse(ec, TF_ANCHOR_END);
+                        TF_SELECTION sel = {};
+                        sel.range = pRange;
+                        sel.style.ase = TF_AE_END;
+                        sel.style.fInterimChar = FALSE;
+                        context_->SetSelection(ec, 1, &sel);
                         pRange->Release();
                     }
                     pInsert->Release();
                 }
             }
-            if (service_->composition_) {
+            else {
+                // Composition already active: update the text in place
                 ITfRange* pRange = nullptr;
                 if (SUCCEEDED(service_->composition_->GetRange(&pRange))) {
                     pRange->SetText(ec, 0, text_.c_str(), (LONG)text_.size());
-                    // Move cursor to end of composition
                     pRange->Collapse(ec, TF_ANCHOR_END);
-                    ITfRange* pSelRange = nullptr;
-                    // Set selection at end
                     TF_SELECTION sel = {};
                     sel.range = pRange;
                     sel.style.ase = TF_AE_END;
@@ -264,8 +269,8 @@ STDMETHODIMP NomTextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, 
     BYTE keyState[256];
     GetKeyboardState(keyState);
     bool ctrl = (keyState[VK_CONTROL] & 0x80) != 0;
-    bool alt  = (keyState[VK_MENU]    & 0x80) != 0;
-    bool win  = (keyState[VK_LWIN]    & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
+    bool alt = (keyState[VK_MENU] & 0x80) != 0;
+    bool win = (keyState[VK_LWIN] & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
 
     // Ctrl/Alt/Win combos: pass through without committing (e.g. Win+Shift+S screenshot)
     if (ctrl || alt || win) return S_OK;
@@ -328,8 +333,8 @@ STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPAR
     BYTE keyState[256];
     GetKeyboardState(keyState);
     bool ctrl = (keyState[VK_CONTROL] & 0x80) != 0;
-    bool alt  = (keyState[VK_MENU]    & 0x80) != 0;
-    bool win  = (keyState[VK_LWIN]    & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
+    bool alt = (keyState[VK_MENU] & 0x80) != 0;
+    bool win = (keyState[VK_LWIN] & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
 
     // Win key combos (Win+Shift+S, Win+V, etc.): pass through WITHOUT committing
     if (win) return S_OK;
@@ -460,6 +465,20 @@ STDMETHODIMP NomTextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfCo
 STDMETHODIMP NomTextService::OnInitDocumentMgr(ITfDocumentMgr* pDocMgr) { return S_OK; }
 STDMETHODIMP NomTextService::OnUninitDocumentMgr(ITfDocumentMgr* pDocMgr) { return S_OK; }
 STDMETHODIMP NomTextService::OnSetFocus(ITfDocumentMgr* pDocMgrFocus, ITfDocumentMgr* pDocMgrPrevFocus) {
+    // Focus changed to a different document/app: hide candidates and reset
+    if (candidateWindow_) candidateWindow_->Hide();
+    composing_.clear();
+    lockedPrefix_.clear();
+    currentCandidates_.clear();
+    currentCandidateConsumed_.clear();
+    candidatePage_ = 0;
+    shorthandActive_ = false;
+    shorthandSegments_.clear();
+    if (composition_) {
+        // We can't end composition here without an edit cookie.
+        // Just release our reference; the framework will clean up.
+        SafeRelease(composition_);
+    }
     return S_OK;
 }
 STDMETHODIMP NomTextService::OnPushContext(ITfContext* pContext) { return S_OK; }
@@ -628,7 +647,8 @@ void NomTextService::OnNumber(ITfContext* pContext, int num) {
         HRESULT hr;
         pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
         pSession->Release();
-    } else {
+    }
+    else {
         // Partial pick: consume first k syllables, keep the rest
         lockedPrefix_ += picked;
 
@@ -885,23 +905,45 @@ void NomTextService::UpdateCandidates() {
 
         candidateWindow_->SetCandidates(currentCandidates_, candidatePage_);
 
-        // Position near the system caret
-        POINT pt = { 0, 0 };
+        // Position near the system caret — multiple fallback strategies
+        POINT pt = { -1, -1 };
+
+        // Strategy 1: GetGUIThreadInfo (works in most Win32 apps)
         GUITHREADINFO gti = {};
         gti.cbSize = sizeof(GUITHREADINFO);
-        if (GetGUIThreadInfo(0, &gti) && gti.hwndCaret) {
+        if (GetGUIThreadInfo(0, &gti) && gti.hwndCaret &&
+            (gti.rcCaret.left != 0 || gti.rcCaret.top != 0 || gti.rcCaret.right != 0)) {
             pt.x = gti.rcCaret.left;
             pt.y = gti.rcCaret.bottom + 4;
             ClientToScreen(gti.hwndCaret, &pt);
         }
-        else {
-            // Fallback: use GetCaretPos
-            GetCaretPos(&pt);
-            HWND hFg = GetForegroundWindow();
-            if (hFg) ClientToScreen(hFg, &pt);
-            pt.y += 24;
+
+        // Strategy 2: GetCaretPos (works if the caret is in the current thread's window)
+        if (pt.x <= 0 && pt.y <= 0) {
+            POINT cp = {};
+            if (GetCaretPos(&cp) && (cp.x != 0 || cp.y != 0)) {
+                pt = cp;
+                HWND hFocus = GetFocus();
+                if (hFocus) ClientToScreen(hFocus, &pt);
+                pt.y += 24;
+            }
         }
-        candidateWindow_->MoveTo(pt.x, pt.y);
+
+        // Strategy 3: Use the focused window's position as last resort
+        if (pt.x <= 0 && pt.y <= 0) {
+            HWND hFg = GetForegroundWindow();
+            if (hFg) {
+                RECT rcFg;
+                GetWindowRect(hFg, &rcFg);
+                pt.x = rcFg.left + 100;
+                pt.y = rcFg.top + 100;
+            }
+        }
+
+        // Only move if we got a valid position (not 0,0)
+        if (pt.x > 0 || pt.y > 0) {
+            candidateWindow_->MoveTo(pt.x, pt.y);
+        }
         candidateWindow_->Show();
     }
     else if (candidateWindow_) {
