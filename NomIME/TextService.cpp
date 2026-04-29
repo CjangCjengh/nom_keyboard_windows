@@ -258,16 +258,33 @@ STDMETHODIMP NomTextService::OnSetFocus(BOOL fForeground) { return S_OK; }
 STDMETHODIMP NomTextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
     *pfEaten = FALSE;
 
-    // Never eat keys when Ctrl or Alt is held — let shortcuts (Ctrl+A, Ctrl+C, Alt+F4 etc.) pass through
+    // Check modifier keys
     BYTE keyState[256];
     GetKeyboardState(keyState);
     bool ctrl = (keyState[VK_CONTROL] & 0x80) != 0;
-    bool alt = (keyState[VK_MENU] & 0x80) != 0;
-    if (ctrl || alt) {
+    bool alt  = (keyState[VK_MENU]    & 0x80) != 0;
+    bool win  = (keyState[VK_LWIN]    & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
+
+    // Ctrl/Alt/Win combos: pass through without committing (e.g. Win+Shift+S screenshot)
+    if (ctrl || alt || win) return S_OK;
+
+    // Function keys, navigation, modifier-only keys: always pass through
+    if ((wParam >= VK_F1 && wParam <= VK_F24) ||
+        wParam == VK_PRINT || wParam == VK_SNAPSHOT ||
+        wParam == VK_INSERT || wParam == VK_DELETE ||
+        wParam == VK_HOME || wParam == VK_END ||
+        wParam == VK_PRIOR || wParam == VK_NEXT ||
+        wParam == VK_LEFT || wParam == VK_RIGHT ||
+        wParam == VK_UP || wParam == VK_DOWN ||
+        wParam == VK_TAB || wParam == VK_CAPITAL ||
+        wParam == VK_NUMLOCK || wParam == VK_SCROLL ||
+        wParam == VK_LWIN || wParam == VK_RWIN || wParam == VK_APPS ||
+        wParam == VK_PAUSE || wParam == VK_CANCEL ||
+        wParam == VK_SHIFT || wParam == VK_CONTROL || wParam == VK_MENU) {
         return S_OK;
     }
 
-    // While composing, eat most keys
+    // While composing, eat most remaining keys
     bool hasComposition = !composing_.empty() || !lockedPrefix_.empty();
 
     if (hasComposition) {
@@ -300,13 +317,33 @@ STDMETHODIMP NomTextService::OnTestKeyUp(ITfContext* pContext, WPARAM wParam, LP
 STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
     *pfEaten = FALSE;
 
-    // Never eat keys when Ctrl or Alt is held — let shortcuts pass through
     BYTE keyState[256];
     GetKeyboardState(keyState);
     bool ctrl = (keyState[VK_CONTROL] & 0x80) != 0;
-    bool alt = (keyState[VK_MENU] & 0x80) != 0;
+    bool alt  = (keyState[VK_MENU]    & 0x80) != 0;
+    bool win  = (keyState[VK_LWIN]    & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
+
+    // Win key combos (Win+Shift+S, Win+V, etc.): pass through WITHOUT committing
+    if (win) return S_OK;
+
+    // Function keys, navigation, modifier-only: pass through without committing
+    if ((wParam >= VK_F1 && wParam <= VK_F24) ||
+        wParam == VK_PRINT || wParam == VK_SNAPSHOT ||
+        wParam == VK_INSERT || wParam == VK_DELETE ||
+        wParam == VK_HOME || wParam == VK_END ||
+        wParam == VK_PRIOR || wParam == VK_NEXT ||
+        wParam == VK_LEFT || wParam == VK_RIGHT ||
+        wParam == VK_UP || wParam == VK_DOWN ||
+        wParam == VK_TAB || wParam == VK_CAPITAL ||
+        wParam == VK_NUMLOCK || wParam == VK_SCROLL ||
+        wParam == VK_LWIN || wParam == VK_RWIN || wParam == VK_APPS ||
+        wParam == VK_PAUSE || wParam == VK_CANCEL ||
+        wParam == VK_SHIFT || wParam == VK_CONTROL || wParam == VK_MENU) {
+        return S_OK;
+    }
+
+    // Ctrl/Alt combos (Ctrl+A, Ctrl+C, etc.): commit composing text first, then pass through
     if (ctrl || alt) {
-        // If composing, commit first so Ctrl+A selects committed text
         bool hasComp = !composing_.empty() || !lockedPrefix_.empty();
         if (hasComp) {
             CommitComposing(pContext);

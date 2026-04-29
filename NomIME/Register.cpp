@@ -67,6 +67,13 @@ BOOL RegisterProfiles() {
 
     if (FAILED(hr) || !pProfileMgr) return FALSE;
 
+    // Always unregister first so display name gets updated on reinstall/upgrade
+    pProfileMgr->UnregisterProfile(
+        CLSID_NomTextService,
+        TEXTSERVICE_LANGID,
+        GUID_NomProfile,
+        0);
+
     wchar_t szModule[MAX_PATH] = {};
     GetModuleFileNameW(g_hInst, szModule, MAX_PATH);
 
