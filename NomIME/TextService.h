@@ -103,6 +103,13 @@ private:
     bool shorthandActive_;
     std::vector<std::wstring> shorthandSegments_;
 
+    // True iff the PREVIOUS keystroke was a standalone-w shortcut (composing was empty
+    // or the syllable had no prior letters, and the engine appended ư/Ư). Used on the
+    // NEXT keystroke to distinguish `w`+`w` (undo the shortcut → literal `w`) from
+    // `u`+`w`+`w` (undo the merge → `uw`). Cleared on any non-engine buffer mutation
+    // (backspace, commit, focus change, shorthand, …).
+    bool lastWasStandaloneW_ = false;
+
     // Candidates
     std::vector<std::wstring> currentCandidates_;
     std::vector<int> currentCandidateConsumed_;

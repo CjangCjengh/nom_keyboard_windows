@@ -15,10 +15,24 @@ class TelexEngine {
 public:
     // Core entry point: given the current composing buffer and a new character,
     // return the new composing buffer after applying Telex rules.
-    static std::wstring Apply(const std::wstring& composing, wchar_t ch, bool toneStyleOld = true);
+    //
+    // lastWasStandaloneW tells the engine that the previous keystroke was a standalone-w
+    // shortcut (i.e. the ư/Ư at the tail of composing was produced by the top branch,
+    // NOT by a u+w merge or cluster rewrite). This distinguishes `w` + `w` (undo the
+    // shortcut → literal `w`) from `u` + `w` + `w` (undo the merge → `uw`). Callers
+    // should set this flag whenever their previous call hit the standalone branch and
+    // clear it on any other buffer mutation (backspace, commit, …).
+    static std::wstring Apply(const std::wstring& composing, wchar_t ch, bool toneStyleOld = true, bool lastWasStandaloneW = false);
 
     // Returns whether ch would potentially trigger a Telex transformation.
     static bool IsTelexTriggerChar(wchar_t ch);
+
+    // Returns true iff passing (tail, ch) to Apply would land in one of the
+    // "standalone-w" branches that append a brand-new ư/Ư (the top branch or
+    // the pure-consonant-onset branch of rewriteHornForW). Callers use this to
+    // set the lastWasStandaloneW flag for the NEXT call so that a subsequent
+    // `w` keypress can be recognised as the "cancel the shortcut" second press.
+    static bool WouldBeStandaloneW(const std::wstring& tail, wchar_t ch);
 
 private:
     // Tone map: base vowel -> 6-element array [untoned, sắc, huyền, hỏi, ngã, nặng]

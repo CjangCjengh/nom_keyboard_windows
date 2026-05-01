@@ -459,6 +459,7 @@ STDMETHODIMP NomTextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfCo
     lockedPrefix_.clear();
     shorthandActive_ = false;
     shorthandSegments_.clear();
+    lastWasStandaloneW_ = false;
     currentCandidates_.clear();
     currentCandidateConsumed_.clear();
     candidatePage_ = 0;
@@ -481,6 +482,7 @@ STDMETHODIMP NomTextService::OnSetFocus(ITfDocumentMgr* pDocMgrFocus, ITfDocumen
     candidatePage_ = 0;
     shorthandActive_ = false;
     shorthandSegments_.clear();
+    lastWasStandaloneW_ = false;
     if (composition_) {
         // We can't end composition here without an edit cookie.
         // Just release our reference; the framework will clean up.
@@ -503,12 +505,19 @@ STDMETHODIMP NomTextService::OnEndEdit(ITfContext* pContext, TfEditCookie ecRead
 void NomTextService::OnChar(ITfContext* pContext, wchar_t ch) {
     if (shorthandActive_) {
         composing_ += ch;
+        lastWasStandaloneW_ = false;
     }
     else {
         size_t lastSpace = composing_.rfind(L' ');
         std::wstring head = (lastSpace != std::wstring::npos) ? composing_.substr(0, lastSpace + 1) : L"";
         std::wstring tail = (lastSpace != std::wstring::npos) ? composing_.substr(lastSpace + 1) : composing_;
-        std::wstring newTail = TelexEngine::Apply(tail, ch, toneStyleOld_);
+        // Capture the previous standalone-w flag and compute the new one via the engine's
+        // authoritative predicate. This covers both the empty/non-letter tail case and the
+        // pure-consonant-onset case (e.g. "ng" + w → "ngư"), while correctly excluding
+        // tails that already contain a vowel (e.g. "u" + w → ư merge, "ban" + w → băn).
+        bool prevStandaloneW = lastWasStandaloneW_;
+        lastWasStandaloneW_ = TelexEngine::WouldBeStandaloneW(tail, ch);
+        std::wstring newTail = TelexEngine::Apply(tail, ch, toneStyleOld_, prevStandaloneW);
         composing_ = head + newTail;
     }
     UpdateCandidates();
@@ -528,6 +537,9 @@ void NomTextService::OnChar(ITfContext* pContext, wchar_t ch) {
 }
 
 void NomTextService::OnBackspace(ITfContext* pContext) {
+    // Any backspace breaks the "previous keystroke was standalone-w" chain, so a
+    // subsequent 'w' must NOT be treated as the second half of a w+w undo.
+    lastWasStandaloneW_ = false;
     if (!composing_.empty()) {
         composing_.pop_back();
     }
@@ -733,6 +745,7 @@ void NomTextService::CommitComposing(ITfContext* pContext) {
     candidatePage_ = 0;
     shorthandActive_ = false;
     shorthandSegments_.clear();
+    lastWasStandaloneW_ = false;
     NgramModel::Instance().ResetContext();
     if (candidateWindow_) candidateWindow_->Hide();
 }

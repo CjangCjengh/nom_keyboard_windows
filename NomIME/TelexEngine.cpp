@@ -462,12 +462,24 @@ std::wstring TelexEngine::RewriteHornForW(const std::wstring& composing, bool tr
 
 // ========== Main Apply function ==========
 
-std::wstring TelexEngine::Apply(const std::wstring& composing, wchar_t ch, bool toneStyleOld) {
+std::wstring TelexEngine::Apply(const std::wstring& composing, wchar_t ch, bool toneStyleOld, bool lastWasStandaloneW) {
     // Standalone w -> ư
     if ((ch == L'w' || ch == L'W') && (composing.empty() || !StringUtil::IsLetter(composing.back()))) {
         return composing + (ch == L'W' ? L'Ư' : L'ư');
     }
     if (composing.empty()) return std::wstring(1, ch);
+
+    // 0a. Standalone-w "second press" undo: if the previous keystroke was a standalone-w
+    //     shortcut (producing the ư/Ư at the tail) and the user is now pressing 'w'/'W'
+    //     again, strip that ư/Ư and append a literal 'w'/'W' instead. This differs from
+    //     the generic undo-merge below (which would give "uw"): without a u prefix there
+    //     was no u to undo.
+    if ((ch == L'w' || ch == L'W') && lastWasStandaloneW) {
+        wchar_t last = composing.back();
+        if (last == L'ư' || last == L'Ư') {
+            return composing.substr(0, composing.size() - 1) + ch;
+        }
+    }
 
     // 0. Undo merge
     std::wstring undone = GetUndoMerge(composing.back(), ch);
@@ -547,4 +559,20 @@ bool TelexEngine::IsTelexTriggerChar(wchar_t ch) {
     return lower == L's' || lower == L'f' || lower == L'r' || lower == L'x' ||
            lower == L'j' || lower == L'z' || lower == L'a' || lower == L'w' ||
            lower == L'e' || lower == L'd' || lower == L'o';
+}
+
+bool TelexEngine::WouldBeStandaloneW(const std::wstring& tail, wchar_t ch) {
+    if (ch != L'w' && ch != L'W') return false;
+    // Locate the start of the trailing letter run (== current syllable).
+    size_t start = tail.size();
+    for (size_t i = tail.size(); i-- > 0; ) {
+        if (!StringUtil::IsLetter(tail[i])) break;
+        start = i;
+    }
+    // Standalone-w iff the syllable run is empty (top branch) OR contains no
+    // vowel-like letter (pure-consonant onset like "ng" / "nh" / "th").
+    for (size_t i = start; i < tail.size(); ++i) {
+        if (CharIsVowelLike(tail[i])) return false;
+    }
+    return true;
 }
