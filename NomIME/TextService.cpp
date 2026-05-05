@@ -275,8 +275,8 @@ STDMETHODIMP NomTextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, 
     BYTE keyState[256];
     GetKeyboardState(keyState);
     bool ctrl = (keyState[VK_CONTROL] & 0x80) != 0;
-    bool alt  = (keyState[VK_MENU]    & 0x80) != 0;
-    bool win  = (keyState[VK_LWIN]    & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
+    bool alt = (keyState[VK_MENU] & 0x80) != 0;
+    bool win = (keyState[VK_LWIN] & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
 
     // Ctrl/Alt/Win combos: pass through without committing (e.g. Win+Shift+S screenshot)
     if (ctrl || alt || win) return S_OK;
@@ -317,6 +317,16 @@ STDMETHODIMP NomTextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, 
             *pfEaten = TRUE;
             return S_OK;
         }
+        // Punctuation / non-letter printable keys: eat them so we can commit + insert in OnKeyDown
+        if (wParam > 0x20 && wParam < 0x80 && !iswalpha((wchar_t)wParam)) {
+            *pfEaten = TRUE;
+            return S_OK;
+        }
+        // OEM keys (punctuation like ;',./ etc on different keyboard layouts)
+        if (wParam >= VK_OEM_1 && wParam <= VK_OEM_102) {
+            *pfEaten = TRUE;
+            return S_OK;
+        }
     }
 
     // Letter keys are always eaten when we want Telex processing
@@ -339,8 +349,8 @@ STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPAR
     BYTE keyState[256];
     GetKeyboardState(keyState);
     bool ctrl = (keyState[VK_CONTROL] & 0x80) != 0;
-    bool alt  = (keyState[VK_MENU]    & 0x80) != 0;
-    bool win  = (keyState[VK_LWIN]    & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
+    bool alt = (keyState[VK_MENU] & 0x80) != 0;
+    bool win = (keyState[VK_LWIN] & 0x80) != 0 || (keyState[VK_RWIN] & 0x80) != 0;
 
     // Win key combos (Win+Shift+S, Win+V, etc.): pass through WITHOUT committing
     if (win) return S_OK;
@@ -431,11 +441,47 @@ STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPAR
         return S_OK;
     }
 
-    // Non-letter characters while composing: commit first
-    if (hasComposition && wParam > 0x20 && wParam < 0x80 && !iswalpha((wchar_t)wParam)) {
-        CommitComposing(pContext);
-        // Don't eat the key, let it pass through
-        *pfEaten = FALSE;
+    // Punctuation / non-letter keys while composing: commit composing + punctuation together
+    if (hasComposition) {
+        // Translate the virtual key to the actual character
+        BYTE ks2[256];
+        GetKeyboardState(ks2);
+        wchar_t chars[4] = {};
+        int result = ToUnicode((UINT)wParam, (UINT)((lParam >> 16) & 0xFF), ks2, chars, 4, 0);
+
+        // Build the full commit string: composing text + punctuation
+        std::wstring display;
+        if (lockedPrefix_.empty()) display = composing_;
+        else if (composing_.empty()) display = lockedPrefix_;
+        else display = lockedPrefix_ + L" " + composing_;
+        std::wstring commitText = StringUtil::Trim(display);
+
+        if (result >= 1) {
+            commitText += std::wstring(chars, result);
+        }
+
+        // Clear state
+        composing_.clear();
+        lockedPrefix_.clear();
+        lockedHistory_.clear();
+        currentCandidates_.clear();
+        currentCandidateConsumed_.clear();
+        candidatePage_ = 0;
+        shorthandActive_ = false;
+        shorthandSegments_.clear();
+        NgramModel::Instance().ResetContext();
+        if (candidateWindow_) candidateWindow_->Hide();
+
+        // Commit everything in one shot
+        if (!commitText.empty()) {
+            EditSession* pSession = new EditSession(this, pContext,
+                EditSession::COMMIT_TEXT, commitText);
+            HRESULT hr;
+            pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+            pSession->Release();
+        }
+        *pfEaten = TRUE;
+        return S_OK;
     }
 
     return S_OK;
@@ -683,7 +729,8 @@ void NomTextService::OnNumber(ITfContext* pContext, int num) {
         HRESULT hr;
         pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
         pSession->Release();
-    } else {
+    }
+    else {
         // Partial pick: consume first k syllables, keep the rest
         lockedPrefix_ += picked;
 
@@ -903,7 +950,8 @@ void NomTextService::UpdateCandidates() {
                 for (auto& c : currentCandidates_) if (c == s) { found = true; break; }
                 if (!found) currentCandidates_.push_back(s);
             }
-        } else {
+        }
+        else {
             currentCandidates_ = dict.Lookup(trimmed, true);
         }
         currentCandidateConsumed_.resize(currentCandidates_.size());
@@ -1157,7 +1205,8 @@ void NomTextService::ObserveNgramForCommit(const std::wstring& commitString) {
         if (ch >= 0xD800 && ch <= 0xDBFF && i + 1 < commitString.size()) {
             token = commitString.substr(i, 2);
             i += 2;
-        } else {
+        }
+        else {
             token = std::wstring(1, ch);
             i += 1;
         }
