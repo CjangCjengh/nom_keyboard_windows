@@ -454,7 +454,10 @@ STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPAR
         if (lockedPrefix_.empty()) display = composing_;
         else if (composing_.empty()) display = lockedPrefix_;
         else display = lockedPrefix_ + L" " + composing_;
+        // Preserve a trailing space the user explicitly typed in composing_
+        bool hadTrailingSpace = !composing_.empty() && composing_.back() == L' ';
         std::wstring commitText = StringUtil::Trim(display);
+        if (hadTrailingSpace) commitText += L' ';
 
         if (result >= 1) {
             commitText += std::wstring(chars, result);
@@ -769,7 +772,10 @@ void NomTextService::CommitComposing(ITfContext* pContext) {
     else if (composing_.empty()) display = lockedPrefix_;
     else display = lockedPrefix_ + L" " + composing_;
 
+    // Preserve a trailing space the user explicitly typed in composing_
+    bool hadTrailingSpace = !composing_.empty() && composing_.back() == L' ';
     std::wstring text = StringUtil::Trim(display);
+    if (hadTrailingSpace && !text.empty()) text += L' ';
     if (text.empty()) {
         EditSession* pSession = new EditSession(this, pContext, EditSession::END_COMPOSITION);
         HRESULT hr;
