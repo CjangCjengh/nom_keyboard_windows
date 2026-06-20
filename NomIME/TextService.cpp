@@ -633,11 +633,11 @@ void NomTextService::OnSpace(ITfContext* pContext) {
         return;
     }
     if (shorthandActive_) {
-        CommitComposing(pContext);
+        CommitComposing(pContext, /*appendTrailingSpace=*/true);
         return;
     }
     if (composing_.empty()) {
-        CommitComposing(pContext);
+        CommitComposing(pContext, /*appendTrailingSpace=*/true);
         return;
     }
     if (!composing_.empty() && composing_.back() == L' ') {
@@ -645,7 +645,7 @@ void NomTextService::OnSpace(ITfContext* pContext) {
         return;
     }
     if (currentCandidates_.empty()) {
-        CommitComposing(pContext);
+        CommitComposing(pContext, /*appendTrailingSpace=*/true);
         return;
     }
 
@@ -766,7 +766,7 @@ void NomTextService::CommitCandidate(int index) {
     // Handled inline in OnNumber now
 }
 
-void NomTextService::CommitComposing(ITfContext* pContext) {
+void NomTextService::CommitComposing(ITfContext* pContext, bool appendTrailingSpace) {
     std::wstring display;
     if (lockedPrefix_.empty()) display = composing_;
     else if (composing_.empty()) display = lockedPrefix_;
@@ -776,6 +776,16 @@ void NomTextService::CommitComposing(ITfContext* pContext) {
     bool hadTrailingSpace = !composing_.empty() && composing_.back() == L' ';
     std::wstring text = StringUtil::Trim(display);
     if (hadTrailingSpace && !text.empty()) text += L' ';
+    // OnSpace's commit branches eat the space keypress (*pfEaten = TRUE), so when the
+    // user pressed space to finish a syllable that has no Nom candidates (e.g. "mỹ"),
+    // to terminate a shorthand run, or to flush a fully-locked prefix, we must emit a
+    // real trailing space ourselves – otherwise the space is silently swallowed. Mirrors
+    // the Android onSpaceSegment behaviour (commitComposing() + commitText(" ")).
+    // Guarded so we never produce a double space when one is already present.
+    if (appendTrailingSpace) {
+        if (text.empty()) text = L" ";
+        else if (text.back() != L' ') text += L' ';
+    }
     if (text.empty()) {
         EditSession* pSession = new EditSession(this, pContext, EditSession::END_COMPOSITION);
         HRESULT hr;
@@ -815,6 +825,12 @@ NomTextService::ShorthandSegments NomTextService::TryShorthandSplit(const std::w
     }
 
     if (NomDictionary::Instance().HasAsciiSinglePrefix(asciiLower)) return result;
+    // The dictionary only knows readings that have a Chữ Nôm character, so legal
+    // Vietnamese syllables like "my" / "sy" are missing from it. Without this guard
+    // the gate would hijack them into shorthand mode and a subsequent tone trigger
+    // ('x' for "mỹ") would be appended literally instead of applied by Telex.
+    // See TelexEngine::IsValidVietnameseSyllableShape for the rationale.
+    if (TelexEngine::IsValidVietnameseSyllableShape(asciiLower)) return result;
 
     static const std::wstring multiOnsets[] = {
         L"ngh", L"ng", L"nh", L"ph", L"th", L"tr", L"ch", L"gh", L"kh"

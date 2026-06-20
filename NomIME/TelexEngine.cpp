@@ -561,6 +561,46 @@ bool TelexEngine::IsTelexTriggerChar(wchar_t ch) {
            lower == L'e' || lower == L'd' || lower == L'o';
 }
 
+bool TelexEngine::IsValidVietnameseSyllableShape(const std::wstring& ascii) {
+    // Legal Vietnamese syllable onsets (ascii, diacritic-stripped). Includes the empty
+    // onset for vowel-initial syllables ("an", "em", "yêu"…). The gi-/qu- glides are
+    // listed too, but in practice any "qu"+vowel / "gi"+vowel buffer is already a
+    // dictionary prefix and never reaches the gate that calls this.
+    static const std::vector<std::wstring> onsets = {
+        L"", L"b", L"c", L"ch", L"d", L"g", L"gh", L"gi", L"h", L"k", L"kh", L"l",
+        L"m", L"n", L"ng", L"ngh", L"nh", L"p", L"ph", L"qu", L"r", L"s", L"t",
+        L"th", L"tr", L"v", L"x"
+    };
+    // Legal Vietnamese syllable codas (ascii). Off-glides (i/u/y) are vowel-like so
+    // they stay inside the vowel run, never the coda.
+    static const std::vector<std::wstring> codas = {
+        L"", L"c", L"ch", L"m", L"n", L"ng", L"nh", L"p", L"t"
+    };
+    static const auto isVowel = [](wchar_t c) {
+        return c == L'a' || c == L'e' || c == L'i' || c == L'o' || c == L'u' || c == L'y';
+    };
+    static const auto contains = [](const std::vector<std::wstring>& v, const std::wstring& s) {
+        for (const auto& e : v) if (e == s) return true;
+        return false;
+    };
+
+    // Locate the single contiguous vowel run.
+    int start = -1, end = -1, runs = 0;
+    bool inRun = false;
+    for (size_t i = 0; i < ascii.size(); ++i) {
+        bool v = isVowel(ascii[i]);
+        if (v && !inRun) { runs++; start = (int)i; end = (int)i; }
+        if (v) end = (int)(i + 1);
+        inRun = v;
+    }
+    // Zero vowels (all consonants, e.g. "vn", "qg") or 2+ separate vowel runs cannot
+    // be a single syllable.
+    if (runs != 1) return false;
+    std::wstring onset = ascii.substr(0, start);
+    std::wstring coda = ascii.substr(end);
+    return contains(onsets, onset) && contains(codas, coda);
+}
+
 bool TelexEngine::WouldBeStandaloneW(const std::wstring& tail, wchar_t ch) {
     if (ch != L'w' && ch != L'W') return false;
     // Locate the start of the trailing letter run (== current syllable).

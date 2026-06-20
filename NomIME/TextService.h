@@ -57,7 +57,7 @@ public:
     // Candidate management
     void UpdateCandidates();
     void CommitCandidate(int index);
-    void CommitComposing(ITfContext* pContext);
+    void CommitComposing(ITfContext* pContext, bool appendTrailingSpace = false);
 
     TfClientId GetClientId() const { return clientId_; }
     ITfThreadMgr* GetThreadMgr() const { return threadMgr_; }

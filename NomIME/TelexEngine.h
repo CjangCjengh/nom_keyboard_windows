@@ -34,6 +34,14 @@ public:
     // `w` keypress can be recognised as the "cancel the shortcut" second press.
     static bool WouldBeStandaloneW(const std::wstring& tail, wchar_t ch);
 
+    // Cheap Vietnamese-syllable-shape check on a diacritic-stripped, lowercased ascii
+    // buffer (only a-z). Returns true iff `ascii` has the shape of a single
+    // well-formed Vietnamese syllable: optional legal onset, exactly one contiguous
+    // vowel cluster, optional legal coda. Used by the viết-tắt activation gate so that
+    // legal syllables missing from the Nom dictionary ("my" -> "mỹ", "sy" -> "sỹ")
+    // stay on the Telex path instead of being hijacked into shorthand mode.
+    static bool IsValidVietnameseSyllableShape(const std::wstring& ascii);
+
 private:
     // Tone map: base vowel -> 6-element array [untoned, sắc, huyền, hỏi, ngã, nặng]
     struct ToneEntry {
