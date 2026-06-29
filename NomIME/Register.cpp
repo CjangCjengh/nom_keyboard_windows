@@ -126,14 +126,42 @@ BOOL RegisterCategories() {
 
     if (FAILED(hr) || !pCategoryMgr) return FALSE;
 
-    // Register as TIP (Text Input Processor)
-    hr = pCategoryMgr->RegisterCategory(
-        CLSID_NomTextService,
-        GUID_TFCAT_TIP_KEYBOARD,
-        CLSID_NomTextService);
+    // Register every capability category a modern TIP needs. TIP_KEYBOARD alone
+    // is enough on Win10 classic Win32 apps, but Win11 runs Notepad, Settings,
+    // the search box and the shell as "immersive" (packaged) apps -- a TIP that
+    // omits IMMERSIVESUPPORT is not loaded there, so the IME appears to never
+    // switch on. SYSTRAYSUPPORT/UIELEMENTENABLED/etc. round out tray + UI
+    // hosting. DISPLAYATTRIBUTEPROVIDER is needed because we set a display
+    // attribute (GUID_NomDisplayAttribute_Input) on the composition.
+    //
+    // Deliberately NOT registered: GUID_TFCAT_TIPCAP_INPUTMODECOMPARTMENT.
+    // That category tells Win11 the TIP has an on/off "input mode" tracked via
+    // GUID_COMPARTMENT_KEYBOARD_OPENCLOSE. Nom is always composing (no Latin/off
+    // mode), so advertising it caused the IME to come up "closed" after switching
+    // away and back -- selected but passing keystrokes straight through as Latin.
+    // As a simple always-on keyboard TIP we omit it; ActivateEx also asserts the
+    // open compartment defensively (see NomTextService::SetKeyboardOpen).
+    static const GUID* const categories[] = {
+        &GUID_TFCAT_TIP_KEYBOARD,
+        &GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+        &GUID_TFCAT_TIPCAP_SECUREMODE,
+        &GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
+        &GUID_TFCAT_TIPCAP_COMLESS,
+        &GUID_TFCAT_TIPCAP_WOW16,
+        &GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
+        &GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+    };
+
+    BOOL ok = TRUE;
+    for (const GUID* cat : categories) {
+        if (FAILED(pCategoryMgr->RegisterCategory(
+                CLSID_NomTextService, *cat, CLSID_NomTextService))) {
+            ok = FALSE;
+        }
+    }
 
     pCategoryMgr->Release();
-    return SUCCEEDED(hr);
+    return ok;
 }
 
 BOOL UnregisterCategories() {
@@ -143,11 +171,23 @@ BOOL UnregisterCategories() {
 
     if (FAILED(hr) || !pCategoryMgr) return FALSE;
 
-    hr = pCategoryMgr->UnregisterCategory(
-        CLSID_NomTextService,
-        GUID_TFCAT_TIP_KEYBOARD,
-        CLSID_NomTextService);
+    // Mirror of the set registered in RegisterCategories().
+    static const GUID* const categories[] = {
+        &GUID_TFCAT_TIP_KEYBOARD,
+        &GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+        &GUID_TFCAT_TIPCAP_SECUREMODE,
+        &GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
+        &GUID_TFCAT_TIPCAP_INPUTMODECOMPARTMENT,
+        &GUID_TFCAT_TIPCAP_COMLESS,
+        &GUID_TFCAT_TIPCAP_WOW16,
+        &GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
+        &GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+    };
+
+    for (const GUID* cat : categories) {
+        pCategoryMgr->UnregisterCategory(CLSID_NomTextService, *cat, CLSID_NomTextService);
+    }
 
     pCategoryMgr->Release();
-    return SUCCEEDED(hr);
+    return TRUE;
 }

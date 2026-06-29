@@ -24,7 +24,8 @@ ipch/
 *.db
 
 # NSIS output
-NomIMESetup/setup.exe
+NomIMESetup/NomKeyboardSetup.exe
+NomIMESetup/nsis_build.log
 
 # OS files
 Thumbs.db

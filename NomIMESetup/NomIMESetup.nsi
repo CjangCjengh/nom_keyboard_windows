@@ -10,7 +10,7 @@
 !endif
 
 Name "Nom Keyboard"
-OutFile "setup.exe"
+OutFile "NomKeyboardSetup.exe"
 Unicode true
 RequestExecutionLevel admin
 InstallDir "$PROGRAMFILES\NomKeyboard"
@@ -44,13 +44,19 @@ Section "Nom Keyboard" SecMain
     SetOutPath "$INSTDIR"
     StrCpy $NeedReboot "0"
 
-    ; Unregister old DLLs if upgrading
-    IfFileExists "$INSTDIR\NomIME64.dll" 0 skip_unreg64
-        ExecWait '"$SYSDIR\regsvr32.exe" /u /s "$INSTDIR\NomIME64.dll"'
-    skip_unreg64:
-    IfFileExists "$INSTDIR\NomIME32.dll" 0 skip_unreg32
-        ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /u /s "$INSTDIR\NomIME32.dll"'
-    skip_unreg32:
+    ; Unregister old TIP profiles if upgrading.
+    ; NOTE: we intentionally do NOT `regsvr32 /u` the previously installed DLL.
+    ; Versions <= 1.0 used CLSID {7A8B9C0D-1E2F-3A4B-5C6D-7E8F9A0B1C2D}, which
+    ; collides with a built-in Win11 class (PrintSupportEnterpriseManagementUIEventArgsFactory).
+    ; Calling DllUnregisterServer on that old DLL would delete HKCR\CLSID\{7A8B...},
+    ; i.e. the SYSTEM print-support class -- so we delete only the TIP profile
+    ; keys here (safe) and let regsvr32 (re)register the new CLSID below.
+    ; Old (colliding) CLSID -- legacy cleanup, both registry views:
+    ExecWait 'reg delete "HKLM\SOFTWARE\Microsoft\CTF\TIP\{7A8B9C0D-1E2F-3A4B-5C6D-7E8F9A0B1C2D}" /f'
+    ExecWait 'reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\CTF\TIP\{7A8B9C0D-1E2F-3A4B-5C6D-7E8F9A0B1C2D}" /f'
+    ; Current CLSID (keep in sync with NomIME\Globals.h CLSID_NomTextService):
+    ExecWait 'reg delete "HKLM\SOFTWARE\Microsoft\CTF\TIP\{FF82830D-8CF7-4DBF-8C03-6380E2BB655F}" /f'
+    ExecWait 'reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\CTF\TIP\{FF82830D-8CF7-4DBF-8C03-6380E2BB655F}" /f'
 
     ; Gently stop ctfmon and TextInputHost (not explorer!)
     ExecWait 'cmd /c taskkill /f /im ctfmon.exe 2>nul'

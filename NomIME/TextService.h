@@ -131,6 +131,10 @@ private:
     void LoadRecentCounts();
     void BumpRecent(const std::wstring& text);
 
+    // Assert the keyboard open/close compartment so Win11 keeps Nom "on" when
+    // (re)selected. See ActivateEx for the rationale.
+    void SetKeyboardOpen(BOOL open);
+
     // Edit session helper class
     class EditSession;
 };

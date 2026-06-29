@@ -21,24 +21,30 @@ extern HINSTANCE g_hInst;
 extern LONG g_cRefDll;
 
 // ---- Text Service GUID ----
-// {7A8B9C0D-1E2F-3A4B-5C6D-7E8F9A0B1C2D}
+// NOTE: must be a unique, freshly-generated v4 UUID. The previous hand-crafted
+// value {7A8B9C0D-1E2F-3A4B-5C6D-7E8F9A0B1C2D} collided with a built-in Windows
+// WinRT CLSID (PrintSupportEnterpriseManagementUIEventArgsFactory in
+// Windows.Graphics.Printing.Workflow.dll) which is present on Win11, so TSF's
+// CoCreateInstance for the text service resolved to the wrong class and the IME
+// appeared in the list but did nothing when selected.
+// {FF82830D-8CF7-4DBF-8C03-6380E2BB655F}
 static const CLSID CLSID_NomTextService =
-{ 0x7a8b9c0d, 0x1e2f, 0x3a4b, { 0x5c, 0x6d, 0x7e, 0x8f, 0x9a, 0x0b, 0x1c, 0x2d } };
+{ 0xff82830d, 0x8cf7, 0x4dbf, { 0x8c, 0x03, 0x63, 0x80, 0xe2, 0xbb, 0x65, 0x5f } };
 
 // ---- Profile GUID (language profile for Vietnamese) ----
-// {8B9C0D1E-2F3A-4B5C-6D7E-8F9A0B1C2D3E}
+// {47411A8D-264C-4C5E-BF2F-14A75591E378}
 static const GUID GUID_NomProfile =
-{ 0x8b9c0d1e, 0x2f3a, 0x4b5c, { 0x6d, 0x7e, 0x8f, 0x9a, 0x0b, 0x1c, 0x2d, 0x3e } };
+{ 0x47411a8d, 0x264c, 0x4c5e, { 0xbf, 0x2f, 0x14, 0xa7, 0x55, 0x91, 0xe3, 0x78 } };
 
 // ---- Compartment GUID for open/close ----
-// {9C0D1E2F-3A4B-5C6D-7E8F-9A0B1C2D3E4F}
+// {8054BB9A-22CB-4595-83F2-58314EAA48B7}
 static const GUID GUID_NomCompartment =
-{ 0x9c0d1e2f, 0x3a4b, 0x5c6d, { 0x7e, 0x8f, 0x9a, 0x0b, 0x1c, 0x2d, 0x3e, 0x4f } };
+{ 0x8054bb9a, 0x22cb, 0x4595, { 0x83, 0xf2, 0x58, 0x31, 0x4e, 0xaa, 0x48, 0xb7 } };
 
 // ---- Display attribute GUIDs ----
-// {AD1E2F3A-4B5C-6D7E-8F9A-0B1C2D3E4F50}
+// {6CECA4BD-A8A8-4EF8-BD19-E84375FF0FA5}
 static const GUID GUID_NomDisplayAttribute_Input =
-{ 0xad1e2f3a, 0x4b5c, 0x6d7e, { 0x8f, 0x9a, 0x0b, 0x1c, 0x2d, 0x3e, 0x4f, 0x50 } };
+{ 0x6ceca4bd, 0xa8a8, 0x4ef8, { 0xbd, 0x19, 0xe8, 0x43, 0x75, 0xff, 0x0f, 0xa5 } };
 
 // Vietnamese language ID (LANGID = 0x042A, LCID for Vietnamese - Vietnam)
 static const LANGID TEXTSERVICE_LANGID = MAKELANGID(LANG_VIETNAMESE, SUBLANG_VIETNAMESE_VIETNAM);

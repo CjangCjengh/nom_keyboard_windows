@@ -220,11 +220,39 @@ STDMETHODIMP NomTextService::ActivateEx(ITfThreadMgr* pThreadMgr, TfClientId tfC
         pSource->Release();
     }
 
+    // Defensively assert the keyboard is "open" (on) via
+    // GUID_COMPARTMENT_KEYBOARD_OPENCLOSE. We deliberately do NOT register the
+    // INPUTMODECOMPARTMENT capability (see RegisterCategories) because Nom has no
+    // off mode, but some Win11 hosts still consult this per-session compartment
+    // when an IME is (re)selected. If it carries a stale "closed" value from a
+    // previously selected mode-aware IME, keystrokes pass straight through as
+    // Latin -- Nom looks selected but behaves like the previous IME. Forcing it
+    // open on every activation guarantees re-selection actually turns Nom on.
+    SetKeyboardOpen(TRUE);
+
     // Create candidate window
     candidateWindow_ = new CandidateWindow(this);
     candidateWindow_->Create(NULL);
 
     return S_OK;
+}
+
+// Set GUID_COMPARTMENT_KEYBOARD_OPENCLOSE on the thread manager's compartment.
+void NomTextService::SetKeyboardOpen(BOOL open) {
+    if (!threadMgr_) return;
+    ITfCompartmentMgr* pCompMgr = nullptr;
+    if (FAILED(threadMgr_->QueryInterface(IID_ITfCompartmentMgr, (void**)&pCompMgr)) || !pCompMgr)
+        return;
+    ITfCompartment* pComp = nullptr;
+    if (SUCCEEDED(pCompMgr->GetCompartment(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, &pComp)) && pComp) {
+        VARIANT var;
+        VariantInit(&var);
+        var.vt = VT_I4;
+        var.lVal = open ? 1 : 0;
+        pComp->SetValue(clientId_, &var);
+        pComp->Release();
+    }
+    pCompMgr->Release();
 }
 
 STDMETHODIMP NomTextService::Deactivate() {

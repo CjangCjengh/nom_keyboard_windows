@@ -25,12 +25,13 @@ A Hán Nôm input method for Windows 10/11, using Telex Vietnamese input.
 
 ### Build Steps / Các bước
 
-1. Open `NomIME.sln` in Visual Studio 2022
+1. Open `NomIME.sln` in Visual Studio (2022 or newer)
 2. Select **Release | x64** configuration
 3. Build the solution (Ctrl+Shift+B):
-   - First `NomIME` compiles → `bin\Release\x64\NomIME.dll`
-   - Also build **Release | Win32** for the 32-bit DLL
-   - Then `NomIMESetup` invokes NSIS → `NomIMESetup\setup.exe`
+   - `NomIME` compiles → `bin\Release\x64\NomIME.dll`
+   - `NomIMESetup` then auto-builds the missing 32-bit DLL and invokes NSIS → `NomIMESetup\NomKeyboardSetup.exe`
+
+> Note: you only need to build **Release | x64**; the setup step builds the Win32 DLL for you. The platform toolset is `$(DefaultPlatformToolset)`, so it binds to whatever Visual Studio version is installed.
 
 ### Manual Registration (for development)
 
@@ -47,6 +48,8 @@ regsvr32 /u bin\Release\x64\NomIME.dll
 After registration, go to **Settings → Time & Language → Language → Vietnamese → Options → Add an input method** and select "Nom Keyboard (Bàn phím Hán Nôm)".
 
 ## Usage / Cách sử dụng
+
+> **After installing (or upgrading), restart Windows** — or sign out and back in — before first use. This lets every running app load the new IME and resets the per-session input state; otherwise a freshly (re)selected Nom Keyboard may stay inactive.
 
 1. Switch to Nom Keyboard using **Win+Space** or the language bar
 2. Type Vietnamese in Telex: e.g. `quocs` → `quốc`

@@ -50,10 +50,11 @@ NomIME.sln
 
 ### Các bước
 
-1. Mở `NomIME.sln` trong Visual Studio 2022
+1. Mở `NomIME.sln` trong Visual Studio (2022 hoặc mới hơn)
 2. Chọn cấu hình **Release | x64**, build solution (Ctrl+Shift+B)
-3. Đổi sang **Release | Win32** và build lại
-4. Build project `NomIMESetup` → `NomIMESetup\setup.exe`
+3. Xong — `NomIMESetup` tự build DLL 32-bit còn thiếu rồi gọi NSIS, tạo ra `NomIMESetup\NomKeyboardSetup.exe`
+
+> Ghi chú: chỉ cần build **Release | x64**; bước cài đặt sẽ tự build cả DLL Win32. Bộ công cụ nền tảng dùng `$(DefaultPlatformToolset)` nên hợp với mọi phiên bản Visual Studio đã cài.
 
 ### Đăng ký thủ công (khi phát triển)
 
@@ -71,7 +72,9 @@ Sau khi đăng ký, vào **Settings → Time & Language → Language → Vietnam
 
 ## Cách sử dụng
 
-1. Chạy `setup.exe` để cài đặt
+> **Sau khi cài đặt (hoặc nâng cấp), hãy khởi động lại Windows** — hoặc đăng xuất rồi đăng nhập lại — trước khi dùng lần đầu. Việc này giúp mọi ứng dụng đang chạy nạp IME mới và đặt lại trạng thái nhập của phiên; nếu không, Bàn phím Hán Nôm vừa được chọn lại có thể không kích hoạt.
+
+1. Chạy `NomKeyboardSetup.exe` để cài đặt
 2. Chuyển sang Bàn phím Hán Nôm bằng **Win+Space** hoặc thanh ngôn ngữ
 3. Gõ tiếng Việt Telex, ví dụ: `quocs` → `quốc`
 4. Ứng viên hiện ra; nhấn **1-9** để chọn, hoặc nhấp chuột
