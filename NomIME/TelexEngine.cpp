@@ -538,9 +538,14 @@ std::wstring TelexEngine::Apply(const std::wstring& composing, wchar_t ch, bool 
         if (idx >= 0) {
             auto [base, _] = GetBaseTone(composing[idx]);
             wchar_t newCh = GetTonedChar(base, tone);
-            std::wstring sb = composing;
-            sb[idx] = newCh;
-            return sb;
+            // Only consume the trigger as a tone mark when it actually changes the
+            // target. For 'z' (tone 0) on an already-unmarked vowel this is a no-op,
+            // so we fall through to the default append and emit a literal 'z'.
+            if (newCh != composing[idx]) {
+                std::wstring sb = composing;
+                sb[idx] = newCh;
+                return sb;
+            }
         }
     }
 
