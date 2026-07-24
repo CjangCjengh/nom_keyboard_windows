@@ -306,6 +306,12 @@ std::wstring TelexEngine::RewriteHatLongDistance(const std::wstring& composing, 
         if (!StringUtil::IsLetter(c)) break;
         auto [baseOfC, toneOfC] = GetBaseTone(c);
         if (baseOfC == targetBase) {
+            // Phonotactic gate: the letters AFTER the vowel we're about to upgrade must
+            // still leave a legal Vietnamese syllable ending, otherwise the hat must not
+            // fire. Canonical case is the double-press tone-undo escape: "re" + s -> "ré",
+            // + s -> "res" – the trailing 's' has broken out of the Telex frame and is not
+            // a legal coda, so a following 'e' appends literally ("rese"), not "rês".
+            if (!IsLegalPostVowelEnding(composing, i + 1)) return L"";
             wchar_t repl = GetTonedChar(hatChar, toneOfC);
             std::wstring result = composing.substr(0, i) + repl + composing.substr(i + 1);
             return result;
@@ -315,6 +321,36 @@ std::wstring TelexEngine::RewriteHatLongDistance(const std::wstring& composing, 
         if (baseOfC == hatBase) return L"";
     }
     return L"";
+}
+
+// Whether the letter run starting at `from` (everything after a vowel that is a
+// long-distance hat candidate) is a legal way to end a Vietnamese syllable:
+//   - empty (open syllable)                                -> legal  ("đẻ" + e -> "để")
+//   - only vowels (target sits inside a vowel cluster)     -> legal  ("treo" + e -> "trêo")
+//   - exactly one legal coda (c, ch, m, n, ng, nh, p, t)   -> legal  ("quoc" + o -> "quôc")
+//   - anything else (illegal coda like the 's' in "res", or a vowel after a consonant)
+//     -> illegal: the hat must not fire.
+// Callers only pass a range of trailing letters (the backward scan above stops at the
+// first non-letter), so no non-letter check is needed here.
+bool TelexEngine::IsLegalPostVowelEnding(const std::wstring& composing, size_t from) {
+    bool sawConsonant = false;
+    for (size_t k = from; k < composing.size(); k++) {
+        if (CharIsVowelLike(composing[k])) {
+            if (sawConsonant) return false;
+        } else {
+            sawConsonant = true;
+        }
+    }
+    if (!sawConsonant) return true;
+    static const std::vector<std::wstring> codas = {
+        L"c", L"ch", L"m", L"n", L"ng", L"nh", L"p", L"t"
+    };
+    std::wstring suffix = composing.substr(from);
+    for (auto& ch : suffix) ch = towlower(ch);
+    for (const auto& coda : codas) {
+        if (suffix == coda) return true;
+    }
+    return false;
 }
 
 std::wstring TelexEngine::ApplyClusterW(const std::wstring& composing, size_t syllableStart) {
@@ -485,6 +521,40 @@ std::wstring TelexEngine::Apply(const std::wstring& composing, wchar_t ch, bool 
     std::wstring undone = GetUndoMerge(composing.back(), ch);
     if (!undone.empty()) {
         return composing.substr(0, composing.size() - 1) + undone;
+    }
+
+    // 0c. Mid-syllable hat undo: the same restore-original escape hatch as step 0, but
+    //     for hat-modified vowels (â/ê/ô) that are NO LONGER at the end of the buffer
+    //     because a coda consonant was typed after them via the long-distance rule (1d).
+    //     Typing the SAME trigger letter again reverts the most recent such vowel to its
+    //     bare form and appends the trigger literally – "rêt" + 'e' -> "rete", mirroring
+    //     how "rê" + 'e' -> "ree" already behaves via the undo merge above. Only UNtoned
+    //     modified vowels are reverted: a toned one (ế/ố/ấ…) means the user has moved on
+    //     to tone editing, which has its own undo in step 0b.
+    const wchar_t* hatUndoFamily = nullptr;
+    switch (ch) {
+        case L'a': case L'A': hatUndoFamily = L"âÂ"; break;
+        case L'e': case L'E': hatUndoFamily = L"êÊ"; break;
+        case L'o': case L'O': hatUndoFamily = L"ôÔ"; break;
+    }
+    if (hatUndoFamily) {
+        for (int i = (int)composing.size() - 1; i >= 0; i--) {
+            wchar_t c = composing[i];
+            if (!StringUtil::IsLetter(c)) break;
+            if (c == hatUndoFamily[0] || c == hatUndoFamily[1]) {
+                wchar_t bare;
+                switch (c) {
+                    case L'â': bare = L'a'; break;
+                    case L'Â': bare = L'A'; break;
+                    case L'ê': bare = L'e'; break;
+                    case L'Ê': bare = L'E'; break;
+                    case L'ô': bare = L'o'; break;
+                    case L'Ô': bare = L'O'; break;
+                    default: bare = c; break;
+                }
+                return composing.substr(0, i) + bare + composing.substr(i + 1) + ch;
+            }
+        }
     }
 
     // 0b. Tone undo

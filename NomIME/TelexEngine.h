@@ -65,6 +65,7 @@ private:
     static std::wstring ApplyClusterW(const std::wstring& composing, size_t syllableStart);
     static std::pair<wchar_t, wchar_t> LongDistanceHatFor(wchar_t ch);
     static std::wstring RewriteHatLongDistance(const std::wstring& composing, wchar_t targetBase, wchar_t hatChar);
+    static bool IsLegalPostVowelEnding(const std::wstring& composing, size_t from);
 
     static bool CharIsVowelLike(wchar_t ch);
     static wchar_t GetTonedChar(wchar_t base, int tone);
