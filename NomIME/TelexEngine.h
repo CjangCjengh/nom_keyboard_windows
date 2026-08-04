@@ -28,8 +28,9 @@ public:
     static bool IsTelexTriggerChar(wchar_t ch);
 
     // Returns true iff passing (tail, ch) to Apply would land in one of the
-    // "standalone-w" branches that append a brand-new ư/Ư (the top branch or
-    // the pure-consonant-onset branch of rewriteHornForW). Callers use this to
+    // "standalone-w" branches that append a brand-new ư/Ư (the top branch, the
+    // pure-consonant-onset branch, or the bare gi-/qu- glide branch of
+    // RewriteHornForW). Callers use this to
     // set the lastWasStandaloneW flag for the NEXT call so that a subsequent
     // `w` keypress can be recognised as the "cancel the shortcut" second press.
     static bool WouldBeStandaloneW(const std::wstring& tail, wchar_t ch);
@@ -63,6 +64,7 @@ private:
     static std::wstring RelocateTone(const std::wstring& composing, wchar_t ch, bool toneStyleOld);
     static std::wstring RewriteHornForW(const std::wstring& composing, bool triggerUpper);
     static std::wstring ApplyClusterW(const std::wstring& composing, size_t syllableStart);
+    static bool IsBareGlideOnset(const std::wstring& syllable);
     static std::pair<wchar_t, wchar_t> LongDistanceHatFor(wchar_t ch);
     static std::wstring RewriteHatLongDistance(const std::wstring& composing, wchar_t targetBase, wchar_t hatChar);
     static bool IsLegalPostVowelEnding(const std::wstring& composing, size_t from);

@@ -356,15 +356,24 @@ bool TelexEngine::IsLegalPostVowelEnding(const std::wstring& composing, size_t f
 std::wstring TelexEngine::ApplyClusterW(const std::wstring& composing, size_t syllableStart) {
     std::wstring syllableSub = composing.substr(syllableStart);
     int postGlideOffset = 0;
-    if (syllableSub.size() >= 3) {
+    if (syllableSub.size() >= 2) {
         wchar_t c0 = towlower(syllableSub[0]);
         wchar_t c1 = towlower(syllableSub[1]);
-        bool hasFurther = false;
-        for (size_t i = 2; i < syllableSub.size(); i++) {
-            if (CharIsVowelLike(syllableSub[i])) { hasFurther = true; break; }
+        bool isGlide = (c0 == L'g' && c1 == L'i') || (c0 == L'q' && c1 == L'u');
+        if (isGlide) {
+            bool hasFurther = false;
+            for (size_t i = 2; i < syllableSub.size(); i++) {
+                if (CharIsVowelLike(syllableSub[i])) { hasFurther = true; break; }
+            }
+            // Skip the glide when a real rhyme vowel follows it – or when the syllable is
+            // nothing but the bare glide ("gi"/"qu"): in the latter case there is no
+            // cluster to rewrite at all (skipping just yields "no match"), and the
+            // caller's fallback treats the w as the rhyme vowel ư ("gi" + w -> "giư").
+            // Without this, "qu" + w would horn the glide u itself and produce the
+            // invalid "qư".
+            if (hasFurther || syllableSub.size() == 2)
+                postGlideOffset = 2;
         }
-        if (hasFurther && ((c0 == L'g' && c1 == L'i') || (c0 == L'q' && c1 == L'u')))
-            postGlideOffset = 2;
     }
     size_t clusterSearchStart = syllableStart + postGlideOffset;
 
@@ -487,13 +496,28 @@ std::wstring TelexEngine::RewriteHornForW(const std::wstring& composing, bool tr
             if (CharIsVowelLike(c)) hasVowel = true;
         }
         if (hasLetter) {
-            if (!hasVowel) {
+            // No vowel yet (pure consonant onset like "ng"/"nh") OR the syllable is
+            // nothing but a gi-/qu- onset glide ("gi"/"qu" – the trailing i/u belongs
+            // to the onset, not the rhyme): the w supplies the vowel ư, e.g.
+            // "ng" + w -> "ngư", "gi" + w -> "giư" (for giương / giường / giưòng).
+            if (!hasVowel || IsBareGlideOnset(rest)) {
                 return composing + (triggerUpper ? L'Ư' : L'ư');
             }
             return composing + literalW;
         }
     }
     return L"";
+}
+
+// Whether `syllable` consists of nothing but a gi-/qu- onset glide ("gi" / "qu", any
+// case) with no rhyme vowel after it. In that position the trailing i/u is part of the
+// onset, so a following 'w' must supply the vowel ư (e.g. "gi" + w -> "giư") instead
+// of being appended literally.
+bool TelexEngine::IsBareGlideOnset(const std::wstring& syllable) {
+    if (syllable.size() != 2) return false;
+    wchar_t c0 = towlower(syllable[0]);
+    wchar_t c1 = towlower(syllable[1]);
+    return (c0 == L'g' && c1 == L'i') || (c0 == L'q' && c1 == L'u');
 }
 
 // ========== Main Apply function ==========
@@ -684,10 +708,12 @@ bool TelexEngine::WouldBeStandaloneW(const std::wstring& tail, wchar_t ch) {
         if (!StringUtil::IsLetter(tail[i])) break;
         start = i;
     }
-    // Standalone-w iff the syllable run is empty (top branch) OR contains no
-    // vowel-like letter (pure-consonant onset like "ng" / "nh" / "th").
+    // Standalone-w iff the syllable run is empty (top branch), contains no vowel-like
+    // letter (pure-consonant onset like "ng" / "nh" / "th"), or is nothing but a gi-/qu-
+    // onset glide (the trailing i/u belongs to the onset, so the w supplies the rhyme
+    // vowel ư, e.g. "gi" + w -> "giư").
     for (size_t i = start; i < tail.size(); ++i) {
-        if (CharIsVowelLike(tail[i])) return false;
+        if (CharIsVowelLike(tail[i])) return IsBareGlideOnset(tail.substr(start));
     }
     return true;
 }
