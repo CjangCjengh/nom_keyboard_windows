@@ -21,11 +21,9 @@ public:
     void Hide();
     BOOL IsVisible() const;
 
-    void MoveTo(int x, int y);
-    void MoveNearCaret(ITfContext* pContext);
+    void PresentAtCaret(const RECT* textCaret, const RECT* document, HWND viewWindow);
 
-    void SetCandidates(const std::vector<std::wstring>& candidates, int page);
-    void SetComposing(const std::wstring& composing); // kept for API compat, does nothing visually
+    void SetCandidates(const std::vector<std::wstring>& candidates);
 
     void NextPage();
     void PrevPage();
@@ -36,15 +34,24 @@ private:
     void OnPaint();
     void OnMouseDown(int x, int y);
     void RecalcLayout();
+    void EnsureFonts();
+    void ReleaseFonts();
+    HANDLE privateFont_ = nullptr;
+    HFONT candidateFont_ = nullptr;
+    HFONT numberFont_ = nullptr;
+    bool triedPrivateFont_ = false;
+    int Px(int dips) const { return MulDiv(dips, dpi_, 96); }
+    UINT dpi_ = 96;
+    POINT anchor_{};
+    LONG caretTop_ = 0;
+    bool hasAnchor_ = false;
 
     static BOOL RegisterWindowClass();
     static const wchar_t* WINDOW_CLASS_NAME;
-    static bool classRegistered_;
 
     NomTextService* service_;
     HWND hwnd_;
     std::vector<std::wstring> candidates_;
-    std::wstring composingText_;
     int currentPage_;
     int totalPages_;
 
@@ -53,18 +60,18 @@ private:
     RECT rcPrev_, rcNext_;
     int totalWidth_, totalHeight_;
 
-    // Candidate text size: 20px for CJK characters
-    static const int CAND_FONT_SIZE = 20;
+    // Dimensions are in DIPs.
+    static const int CAND_FONT_SIZE = 16;
     // Number label size
-    static const int NUM_FONT_SIZE  = 13;
+    static const int NUM_FONT_SIZE  = 14;
     // Row height
-    static const int ROW_HEIGHT     = 36;
+    static const int ROW_HEIGHT     = 27;
     // Horizontal padding between items
-    static const int ITEM_GAP       = 6;
+    static const int ITEM_GAP       = 12;
     // Padding inside each item (number + text)
     static const int ITEM_INNER_PAD = 4;
     // Window edge padding
-    static const int EDGE_PAD       = 8;
+    static const int EDGE_PAD       = 4;
     // Nav button width
     static const int NAV_BTN_W      = 24;
 };

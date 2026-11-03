@@ -2,8 +2,8 @@
 #include "ClassFactory.h"
 #include "TextService.h"
 
-ClassFactory::ClassFactory() : refCount_(1) {}
-ClassFactory::~ClassFactory() {}
+ClassFactory::ClassFactory() : refCount_(1) { InterlockedIncrement(&g_cRefDll); }
+ClassFactory::~ClassFactory() { InterlockedDecrement(&g_cRefDll); }
 
 STDMETHODIMP ClassFactory::QueryInterface(REFIID riid, void** ppvObj) {
     if (!ppvObj) return E_INVALIDARG;

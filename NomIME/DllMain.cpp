@@ -55,6 +55,5 @@ STDAPI DllRegisterServer() {
 STDAPI DllUnregisterServer() {
     UnregisterCategories();
     UnregisterProfiles();
-    UnregisterServer();
-    return S_OK;
+    return UnregisterServer() ? S_OK : E_FAIL;
 }

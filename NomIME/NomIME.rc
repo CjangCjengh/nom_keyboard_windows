@@ -1,9 +1,11 @@
 // NomIME.rc — Resource script
-#include <winver.h>
+#pragma code_page(65001)
+#include <windows.h>
+#include "SettingsResource.h"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0,0
- PRODUCTVERSION 1,0,0,0
+ FILEVERSION 1,1,4,0
+ PRODUCTVERSION 1,1,4,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -20,16 +22,46 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Nom Keyboard Project"
             VALUE "FileDescription", "Nom Keyboard (Bàn phím Hán Nôm) IME for Windows"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileVersion", "1.1.4.0"
             VALUE "InternalName", "NomIME.dll"
             VALUE "LegalCopyright", "Copyright (C) 2025"
             VALUE "OriginalFilename", "NomIME.dll"
             VALUE "ProductName", "Nom Keyboard"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductVersion", "1.1.4.0"
         END
     END
     BLOCK "VarFileInfo"
     BEGIN
         VALUE "Translation", 0x409, 1200
     END
+END
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+IDD_SETTINGS DIALOGEX 0, 0, 245, 133
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Nom Keyboard settings"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT "Vietnamese input", -1, 12, 10, 215, 12
+    AUTOCHECKBOX "Traditional tone placement (òa instead of oà)", IDC_TONE, 12, 29, 224, 12
+    AUTOCHECKBOX "Suggest words from abbreviated readings", IDC_SHORT, 12, 47, 224, 12
+    AUTOCHECKBOX "Convert multi-syllable readings in segments", IDC_SEGMENT, 12, 65, 224, 12
+    LTEXT "Could not save settings for this user.", IDC_SAVE_ERROR, 12, 87, 221, 12, NOT WS_VISIBLE
+    DEFPUSHBUTTON "OK", IDOK, 125, 110, 50, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 182, 110, 50, 14
+END
+
+LANGUAGE LANG_VIETNAMESE, SUBLANG_DEFAULT
+IDD_SETTINGS DIALOGEX 0, 0, 245, 133
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Tuỳ chọn bàn phím Hán Nôm"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT "Gõ tiếng Việt", -1, 12, 10, 215, 12
+    AUTOCHECKBOX "Đặt dấu kiểu cũ (òa thay vì oà)", IDC_TONE, 12, 29, 224, 12
+    AUTOCHECKBOX "Gợi ý từ khi gõ viết tắt", IDC_SHORT, 12, 47, 224, 12
+    AUTOCHECKBOX "Chuyển đổi cụm nhiều âm tiết theo phân đoạn", IDC_SEGMENT, 12, 65, 224, 12
+    LTEXT "Không thể lưu tuỳ chọn của người dùng.", IDC_SAVE_ERROR, 12, 87, 221, 12, NOT WS_VISIBLE
+    DEFPUSHBUTTON "Lưu", IDOK, 125, 110, 50, 14
+    PUSHBUTTON "Huỷ", IDCANCEL, 182, 110, 50, 14
 END

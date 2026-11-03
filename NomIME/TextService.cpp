@@ -6,21 +6,23 @@
 #include "UserDictionary.h"
 #include "NgramModel.h"
 #include "StringUtil.h"
+#include <unordered_set>
 
 // ---- EditSession: helper to perform edits inside a TSF edit cookie ----
 class NomTextService::EditSession : public ITfEditSession {
 public:
-    enum Action { SET_COMPOSING, COMMIT_TEXT, END_COMPOSITION };
+    enum Action { SET_COMPOSING, COMMIT_TEXT, END_COMPOSITION, READ_LAYOUT };
 
     EditSession(NomTextService* pService, ITfContext* pContext, Action action,
         const std::wstring& text = L"")
         : refCount_(1), service_(pService), context_(pContext),
         action_(action), text_(text)
     {
+        service_->AddRef();
         context_->AddRef();
     }
 
-    ~EditSession() { SafeRelease(context_); }
+    ~EditSession() { SafeRelease(context_); service_->Release(); }
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppvObj) override {
         if (!ppvObj) return E_INVALIDARG;
@@ -43,6 +45,12 @@ public:
         if (!service_ || !context_) return E_FAIL;
 
         switch (action_) {
+        case READ_LAYOUT:
+            if (context_ == service_->candidateContext_) {
+                service_->layoutReadPending_ = false;
+                service_->PresentCandidates(context_, ec);
+            }
+            break;
         case SET_COMPOSING: {
             // Start or update composition
             if (!service_->composition_) {
@@ -85,6 +93,7 @@ public:
                     pRange->Release();
                 }
             }
+            service_->PresentCandidates(context_, ec);
             break;
         }
         case COMMIT_TEXT: {
@@ -133,8 +142,8 @@ private:
 NomTextService::NomTextService()
     : refCount_(1), clientId_(TF_CLIENTID_NULL), threadMgr_(nullptr),
     threadMgrSinkCookie_(TF_INVALID_COOKIE), textEditSinkCookie_(TF_INVALID_COOKIE),
-    composition_(nullptr), compositionContext_(nullptr),
-    shorthandActive_(false), candidatePage_(0), candidateWindow_(nullptr),
+    composition_(nullptr),
+    shorthandActive_(false), candidateWindow_(nullptr),
     toneStyleOld_(false), shorthandEnabled_(true), segmentMode_(true)
 {
     InterlockedIncrement(&g_cRefDll);
@@ -154,6 +163,9 @@ STDMETHODIMP NomTextService::QueryInterface(REFIID riid, void** ppvObj) {
         IsEqualIID(riid, IID_ITfTextInputProcessorEx)) {
         *ppvObj = static_cast<ITfTextInputProcessorEx*>(this);
     }
+    else if (IsEqualIID(riid, IID_ITfFnConfigure) || IsEqualIID(riid, IID_ITfFunction)) {
+        *ppvObj = static_cast<ITfFnConfigure*>(this);
+    }
     else if (IsEqualIID(riid, IID_ITfKeyEventSink)) {
         *ppvObj = static_cast<ITfKeyEventSink*>(this);
     }
@@ -162,6 +174,9 @@ STDMETHODIMP NomTextService::QueryInterface(REFIID riid, void** ppvObj) {
     }
     else if (IsEqualIID(riid, IID_ITfThreadMgrEventSink)) {
         *ppvObj = static_cast<ITfThreadMgrEventSink*>(this);
+    }
+    else if (IsEqualIID(riid, IID_ITfTextLayoutSink)) {
+        *ppvObj = static_cast<ITfTextLayoutSink*>(this);
     }
     else if (IsEqualIID(riid, IID_ITfTextEditSink)) {
         *ppvObj = static_cast<ITfTextEditSink*>(this);
@@ -276,6 +291,7 @@ STDMETHODIMP NomTextService::Deactivate() {
     // Persist n-gram model
     NgramModel::Instance().PersistNow();
 
+    HideCandidates();
     // Destroy candidate window
     if (candidateWindow_) {
         candidateWindow_->Destroy();
@@ -284,7 +300,6 @@ STDMETHODIMP NomTextService::Deactivate() {
     }
 
     SafeRelease(composition_);
-    SafeRelease(compositionContext_);
     SafeRelease(threadMgr_);
     clientId_ = TF_CLIENTID_NULL;
 
@@ -294,7 +309,11 @@ STDMETHODIMP NomTextService::Deactivate() {
 
 // ---- ITfKeyEventSink ----
 
-STDMETHODIMP NomTextService::OnSetFocus(BOOL fForeground) { return S_OK; }
+STDMETHODIMP NomTextService::OnSetFocus(BOOL foreground) {
+    if (foreground) LoadPreferences();
+    else HideCandidates();
+    return S_OK;
+}
 
 STDMETHODIMP NomTextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
     *pfEaten = FALSE;
@@ -387,7 +406,6 @@ STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPAR
     if ((wParam == VK_PRIOR || wParam == VK_NEXT) && !currentCandidates_.empty() && candidateWindow_) {
         if (wParam == VK_PRIOR) candidateWindow_->PrevPage();
         else candidateWindow_->NextPage();
-        candidatePage_ = candidateWindow_->GetCurrentPage();
         candidateWindow_->Show();
         *pfEaten = TRUE;
         return S_OK;
@@ -497,11 +515,10 @@ STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPAR
         lockedHistory_.clear();
         currentCandidates_.clear();
         currentCandidateConsumed_.clear();
-        candidatePage_ = 0;
         shorthandActive_ = false;
         shorthandSegments_.clear();
         NgramModel::Instance().ResetContext();
-        if (candidateWindow_) candidateWindow_->Hide();
+        HideCandidates();
 
         // Commit everything in one shot
         if (!commitText.empty()) {
@@ -539,8 +556,7 @@ STDMETHODIMP NomTextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfCo
     lastWasStandaloneW_ = false;
     currentCandidates_.clear();
     currentCandidateConsumed_.clear();
-    candidatePage_ = 0;
-    if (candidateWindow_) candidateWindow_->Hide();
+    HideCandidates();
     return S_OK;
 }
 
@@ -550,13 +566,12 @@ STDMETHODIMP NomTextService::OnInitDocumentMgr(ITfDocumentMgr* pDocMgr) { return
 STDMETHODIMP NomTextService::OnUninitDocumentMgr(ITfDocumentMgr* pDocMgr) { return S_OK; }
 STDMETHODIMP NomTextService::OnSetFocus(ITfDocumentMgr* pDocMgrFocus, ITfDocumentMgr* pDocMgrPrevFocus) {
     // Focus changed to a different document/app: hide candidates and reset
-    if (candidateWindow_) candidateWindow_->Hide();
+    HideCandidates();
     composing_.clear();
     lockedPrefix_.clear();
     lockedHistory_.clear();
     currentCandidates_.clear();
     currentCandidateConsumed_.clear();
-    candidatePage_ = 0;
     shorthandActive_ = false;
     shorthandSegments_.clear();
     lastWasStandaloneW_ = false;
@@ -568,12 +583,100 @@ STDMETHODIMP NomTextService::OnSetFocus(ITfDocumentMgr* pDocMgrFocus, ITfDocumen
     return S_OK;
 }
 STDMETHODIMP NomTextService::OnPushContext(ITfContext* pContext) { return S_OK; }
-STDMETHODIMP NomTextService::OnPopContext(ITfContext* pContext) { return S_OK; }
+STDMETHODIMP NomTextService::OnPopContext(ITfContext* pContext) {
+    if (pContext == candidateContext_) HideCandidates();
+    return S_OK;
+}
 
 // ---- ITfTextEditSink ----
 
 STDMETHODIMP NomTextService::OnEndEdit(ITfContext* pContext, TfEditCookie ecReadOnly,
     ITfEditRecord* pEditRecord) {
+    return S_OK;
+}
+
+// Keep a layout subscription only for the editor which owns the candidate list.
+void NomTextService::SetCandidateContext(ITfContext* context) {
+    if (context == candidateContext_) return;
+    if (candidateWindow_) candidateWindow_->Hide();
+    if (layoutCookie_ != TF_INVALID_COOKIE) {
+        ITfSource* source = nullptr;
+        if (SUCCEEDED(candidateContext_->QueryInterface(IID_PPV_ARGS(&source)))) {
+            source->UnadviseSink(layoutCookie_);
+            source->Release();
+        }
+        layoutCookie_ = TF_INVALID_COOKIE;
+    }
+    SafeRelease(candidateContext_);
+    layoutReadPending_ = false;
+    candidateContext_ = context;
+    if (context) {
+        context->AddRef();
+        ITfSource* source = nullptr;
+        if (SUCCEEDED(context->QueryInterface(IID_PPV_ARGS(&source)))) {
+            source->AdviseSink(IID_ITfTextLayoutSink, static_cast<ITfTextLayoutSink*>(this), &layoutCookie_);
+            source->Release();
+        }
+    }
+}
+
+void NomTextService::HideCandidates() {
+    SetCandidateContext(nullptr);
+}
+
+void NomTextService::PresentCandidates(ITfContext* context, TfEditCookie ec) {
+    if (context != candidateContext_ || !candidateWindow_) return;
+    ITfContextView* view = nullptr;
+    RECT caret{}, document{};
+    HWND hwnd = nullptr;
+    bool haveCaret = false, haveDocument = false;
+    if (SUCCEEDED(context->GetActiveView(&view)) && view) {
+        view->GetWnd(&hwnd);
+        haveDocument = SUCCEEDED(view->GetScreenExt(&document)) && !IsRectEmpty(&document);
+        if (!haveDocument && hwnd && GetClientRect(hwnd, &document) && !IsRectEmpty(&document)) {
+            POINT origin{};
+            if (ClientToScreen(hwnd, &origin)) {
+                OffsetRect(&document, origin.x, origin.y);
+                haveDocument = true;
+            }
+        }
+        ITfRange* range = nullptr;
+        if (composition_ && SUCCEEDED(composition_->GetRange(&range))) {
+            BOOL clipped = FALSE;
+            if (SUCCEEDED(range->Collapse(ec, TF_ANCHOR_END))) {
+                haveCaret = SUCCEEDED(view->GetTextExt(ec, range, &caret, &clipped)) &&
+                    !clipped && caret.bottom > caret.top;
+                // Some hosts can measure text but have no extent for an insertion point.
+                if (!haveCaret) {
+                    LONG moved = 0;
+                    haveCaret = SUCCEEDED(range->ShiftStart(ec, -1, &moved, nullptr)) && moved == -1 &&
+                        SUCCEEDED(view->GetTextExt(ec, range, &caret, &clipped)) && !clipped &&
+                        caret.bottom > caret.top;
+                    caret.left = caret.right;
+                }
+            }
+            range->Release();
+        }
+        view->Release();
+    }
+    candidateWindow_->PresentAtCaret(haveCaret ? &caret : nullptr, haveDocument ? &document : nullptr, hwnd);
+}
+
+STDMETHODIMP NomTextService::OnLayoutChange(ITfContext* context, TfLayoutCode code, ITfContextView*) {
+    if (!context || context != candidateContext_) return S_OK;
+    if (code == TF_LC_DESTROY) {
+        if (candidateWindow_) candidateWindow_->Hide();
+    } else if (!layoutReadPending_) {
+        // Editors may return TS_E_NOLAYOUT during the write. Retry under a
+        // read cookie after the host lays out the text, even for the first key.
+        auto* session = new (std::nothrow) EditSession(this, context, EditSession::READ_LAYOUT);
+        if (!session) return E_OUTOFMEMORY;
+        layoutReadPending_ = true;
+        HRESULT result = E_FAIL;
+        HRESULT hr = context->RequestEditSession(clientId_, session, TF_ES_ASYNC | TF_ES_READ, &result);
+        session->Release();
+        if (FAILED(hr) || FAILED(result)) layoutReadPending_ = false;
+    }
     return S_OK;
 }
 
@@ -597,7 +700,7 @@ void NomTextService::OnChar(ITfContext* pContext, wchar_t ch) {
         std::wstring newTail = TelexEngine::Apply(tail, ch, toneStyleOld_, prevStandaloneW);
         composing_ = head + newTail;
     }
-    UpdateCandidates();
+    UpdateCandidates(pContext);
 
     // Build display text
     std::wstring display;
@@ -634,14 +737,13 @@ void NomTextService::OnBackspace(ITfContext* pContext) {
         pSession->Release();
         currentCandidates_.clear();
         currentCandidateConsumed_.clear();
-        candidatePage_ = 0;
         shorthandActive_ = false;
         shorthandSegments_.clear();
-        if (candidateWindow_) candidateWindow_->Hide();
+        HideCandidates();
         return;
     }
 
-    UpdateCandidates();
+    UpdateCandidates(pContext);
 
     std::wstring display;
     if (lockedPrefix_.empty()) display = composing_;
@@ -679,7 +781,7 @@ void NomTextService::OnSpace(ITfContext* pContext) {
 
     // Add space as syllable separator
     composing_ += L' ';
-    UpdateCandidates();
+    UpdateCandidates(pContext);
 
     std::wstring display;
     if (lockedPrefix_.empty()) display = composing_;
@@ -702,10 +804,9 @@ void NomTextService::OnEscape(ITfContext* pContext) {
     lockedHistory_.clear();
     currentCandidates_.clear();
     currentCandidateConsumed_.clear();
-    candidatePage_ = 0;
     shorthandActive_ = false;
     shorthandSegments_.clear();
-    if (candidateWindow_) candidateWindow_->Hide();
+    HideCandidates();
 
     EditSession* pSession = new EditSession(this, pContext, EditSession::END_COMPOSITION);
     HRESULT hr;
@@ -714,7 +815,12 @@ void NomTextService::OnEscape(ITfContext* pContext) {
 }
 
 void NomTextService::OnNumber(ITfContext* pContext, int num) {
-    int idx = candidatePage_ * MAX_CANDIDATES_DISPLAY + num - 1;
+    int page = candidateWindow_ ? candidateWindow_->GetCurrentPage() : 0;
+    int idx = page * MAX_CANDIDATES_DISPLAY + num - 1;
+    PickCandidate(pContext, idx);
+}
+
+void NomTextService::PickCandidate(ITfContext* pContext, int idx) {
     if (idx < 0 || idx >= (int)currentCandidates_.size()) return;
 
     std::wstring picked = currentCandidates_[idx];
@@ -750,10 +856,9 @@ void NomTextService::OnNumber(ITfContext* pContext, int num) {
         lockedHistory_.clear();
         currentCandidates_.clear();
         currentCandidateConsumed_.clear();
-        candidatePage_ = 0;
         shorthandActive_ = false;
         shorthandSegments_.clear();
-        if (candidateWindow_) candidateWindow_->Hide();
+        HideCandidates();
 
         EditSession* pSession = new EditSession(this, pContext,
             EditSession::COMMIT_TEXT, commitText);
@@ -774,7 +879,7 @@ void NomTextService::OnNumber(ITfContext* pContext, int num) {
         composing_ = remaining;
 
         // Refresh candidates for the remaining syllables
-        UpdateCandidates();
+        UpdateCandidates(pContext);
 
         // Update the composing text shown in the editor
         std::wstring display;
@@ -791,7 +896,15 @@ void NomTextService::OnNumber(ITfContext* pContext, int num) {
 }
 
 void NomTextService::CommitCandidate(int index) {
-    // Handled inline in OnNumber now
+    if (!threadMgr_ || !candidateWindow_ || !candidateWindow_->IsVisible()) return;
+    ITfDocumentMgr* document = nullptr;
+    ITfContext* context = nullptr;
+    if (SUCCEEDED(threadMgr_->GetFocus(&document)) && document &&
+        SUCCEEDED(document->GetTop(&context)) && context) {
+        PickCandidate(context, index);
+    }
+    SafeRelease(context);
+    SafeRelease(document);
 }
 
 void NomTextService::CommitComposing(ITfContext* pContext, bool appendTrailingSpace) {
@@ -833,12 +946,11 @@ void NomTextService::CommitComposing(ITfContext* pContext, bool appendTrailingSp
     lockedHistory_.clear();
     currentCandidates_.clear();
     currentCandidateConsumed_.clear();
-    candidatePage_ = 0;
     shorthandActive_ = false;
     shorthandSegments_.clear();
     lastWasStandaloneW_ = false;
     NgramModel::Instance().ResetContext();
-    if (candidateWindow_) candidateWindow_->Hide();
+    HideCandidates();
 }
 
 // ---- Candidate gathering ----
@@ -906,12 +1018,11 @@ NomTextService::ShorthandSegments NomTextService::TryShorthandSplit(const std::w
     return result;
 }
 
-void NomTextService::UpdateCandidates() {
+void NomTextService::UpdateCandidates(ITfContext* pContext) {
     if (composing_.empty() && lockedPrefix_.empty()) {
         currentCandidates_.clear();
         currentCandidateConsumed_.clear();
-        candidatePage_ = 0;
-        if (candidateWindow_) candidateWindow_->Hide();
+        HideCandidates();
         return;
     }
 
@@ -972,17 +1083,7 @@ void NomTextService::UpdateCandidates() {
                     currentCandidateConsumed_.push_back(k);
                 }
             }
-            if (k == 1) {
-                auto singles = dict.LookupSingle(prefix, true);
-                for (auto& v : singles) {
-                    bool found = false;
-                    for (auto& c : currentCandidates_) if (c == v) { found = true; break; }
-                    if (!found) {
-                        currentCandidates_.push_back(v);
-                        currentCandidateConsumed_.push_back(1);
-                    }
-                }
-            }
+
         }
     }
     else {
@@ -994,11 +1095,10 @@ void NomTextService::UpdateCandidates() {
             // Single-char only: exact match + prefix match
             auto exact = dict.LookupSingle(trimmed, true);
             auto prefix = dict.LookupSinglePrefix(trimmed, 500, true);
-            currentCandidates_ = exact;
-            for (auto& s : prefix) {
-                bool found = false;
-                for (auto& c : currentCandidates_) if (c == s) { found = true; break; }
-                if (!found) currentCandidates_.push_back(s);
+            currentCandidates_ = std::move(exact);
+            std::unordered_set<std::wstring> seen(currentCandidates_.begin(), currentCandidates_.end());
+            for (auto& candidate : prefix) {
+                if (seen.insert(candidate).second) currentCandidates_.push_back(std::move(candidate));
             }
         }
         else {
@@ -1039,7 +1139,6 @@ void NomTextService::UpdateCandidates() {
         currentCandidateConsumed_ = sortedConsumed;
     }
 
-    candidatePage_ = 0;
 
     // Update candidate window
     if (!currentCandidates_.empty()) {
@@ -1049,81 +1148,16 @@ void NomTextService::UpdateCandidates() {
             candidateWindow_->Create(NULL);
         }
 
-        // Build composing display for the candidate bar
-        std::wstring composingDisplay;
-        if (lockedPrefix_.empty()) composingDisplay = composing_;
-        else if (composing_.empty()) composingDisplay = lockedPrefix_;
-        else composingDisplay = lockedPrefix_ + L" " + composing_;
-        candidateWindow_->SetComposing(composingDisplay);
-
-        candidateWindow_->SetCandidates(currentCandidates_, candidatePage_);
-
-        // Position near the system caret — multiple fallback strategies
-        POINT pt = { -1, -1 };
-
-        // Strategy 1: GetGUIThreadInfo (works in most Win32 apps)
-        GUITHREADINFO gti = {};
-        gti.cbSize = sizeof(GUITHREADINFO);
-        if (GetGUIThreadInfo(0, &gti) && gti.hwndCaret &&
-            (gti.rcCaret.left != 0 || gti.rcCaret.top != 0 || gti.rcCaret.right != 0)) {
-            pt.x = gti.rcCaret.left;
-            pt.y = gti.rcCaret.bottom + 4;
-            ClientToScreen(gti.hwndCaret, &pt);
-        }
-
-        // Strategy 2: GetCaretPos (works if the caret is in the current thread's window)
-        if (pt.x <= 0 && pt.y <= 0) {
-            POINT cp = {};
-            if (GetCaretPos(&cp) && (cp.x != 0 || cp.y != 0)) {
-                pt = cp;
-                HWND hFocus = GetFocus();
-                if (hFocus) ClientToScreen(hFocus, &pt);
-                pt.y += 24;
-            }
-        }
-
-        // Strategy 3: Use the focused window's position as last resort
-        if (pt.x <= 0 && pt.y <= 0) {
-            HWND hFg = GetForegroundWindow();
-            if (hFg) {
-                RECT rcFg;
-                GetWindowRect(hFg, &rcFg);
-                pt.x = rcFg.left + 100;
-                pt.y = rcFg.top + 100;
-            }
-        }
-
-        // Only move if we got a valid position (not 0,0)
-        if (pt.x > 0 || pt.y > 0) {
-            candidateWindow_->MoveTo(pt.x, pt.y);
-        }
+        SetCandidateContext(pContext);
+        candidateWindow_->SetCandidates(currentCandidates_);
         candidateWindow_->Show();
     }
-    else if (candidateWindow_) {
-        candidateWindow_->Hide();
+    else {
+        HideCandidates();
     }
 }
 
 // ---- Preferences ----
-
-void NomTextService::LoadPreferences() {
-    // Read from registry: HKCU\Software\NomKeyboard
-    HKEY hKey = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\NomKeyboard", 0,
-        KEY_READ, &hKey) == ERROR_SUCCESS)
-    {
-        DWORD val = 0, sz = sizeof(DWORD);
-        if (RegQueryValueExW(hKey, L"ToneStyleOld", NULL, NULL, (BYTE*)&val, &sz) == ERROR_SUCCESS)
-            toneStyleOld_ = (val != 0);
-        val = 1; sz = sizeof(DWORD);
-        if (RegQueryValueExW(hKey, L"ShorthandEnabled", NULL, NULL, (BYTE*)&val, &sz) == ERROR_SUCCESS)
-            shorthandEnabled_ = (val != 0);
-        val = 1; sz = sizeof(DWORD);
-        if (RegQueryValueExW(hKey, L"SegmentMode", NULL, NULL, (BYTE*)&val, &sz) == ERROR_SUCCESS)
-            segmentMode_ = (val != 0);
-        RegCloseKey(hKey);
-    }
-}
 
 void NomTextService::BumpRecent(const std::wstring& text) {
     recentCounts_[text]++;

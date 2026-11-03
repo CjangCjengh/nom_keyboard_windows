@@ -7,7 +7,9 @@ class NomTextService : public ITfTextInputProcessorEx,
                        public ITfKeyEventSink,
                        public ITfCompositionSink,
                        public ITfThreadMgrEventSink,
-                       public ITfTextEditSink {
+                       public ITfTextEditSink,
+                       public ITfTextLayoutSink,
+                       public ITfFnConfigure {
 public:
     NomTextService();
     virtual ~NomTextService();
@@ -46,6 +48,8 @@ public:
     STDMETHODIMP OnEndEdit(ITfContext* pContext, TfEditCookie ecReadOnly,
                            ITfEditRecord* pEditRecord) override;
 
+    STDMETHODIMP OnLayoutChange(ITfContext* context, TfLayoutCode code, ITfContextView* view) override;
+
     // Internal methods called by key handling
     void OnChar(ITfContext* pContext, wchar_t ch);
     void OnBackspace(ITfContext* pContext);
@@ -54,8 +58,12 @@ public:
     void OnEscape(ITfContext* pContext);
     void OnNumber(ITfContext* pContext, int num);
 
+    // System keyboard options (also queried before the text service is activated).
+    STDMETHODIMP GetDisplayName(BSTR* name) override;
+    STDMETHODIMP Show(HWND parent, LANGID language, REFGUID profile) override;
+
     // Candidate management
-    void UpdateCandidates();
+    void UpdateCandidates(ITfContext* context);
     void CommitCandidate(int index);
     void CommitComposing(ITfContext* pContext, bool appendTrailingSpace = false);
 
@@ -93,7 +101,12 @@ private:
     DWORD threadMgrSinkCookie_;
     DWORD textEditSinkCookie_;
     ITfComposition* composition_;
-    ITfContext* compositionContext_;
+    ITfContext* candidateContext_ = nullptr;
+    DWORD layoutCookie_ = TF_INVALID_COOKIE;
+    bool layoutReadPending_ = false;
+    void SetCandidateContext(ITfContext* context);
+    void HideCandidates();
+    void PresentCandidates(ITfContext* context, TfEditCookie ec);
 
     // Composing state
     std::wstring composing_;        // Current Vietnamese text being composed
@@ -113,7 +126,7 @@ private:
     // Candidates
     std::vector<std::wstring> currentCandidates_;
     std::vector<int> currentCandidateConsumed_;
-    int candidatePage_;
+    void PickCandidate(ITfContext* pContext, int index);
 
     // Candidate window
     CandidateWindow* candidateWindow_;

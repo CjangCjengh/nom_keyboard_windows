@@ -169,6 +169,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="DllMain.cpp" />
+    <ClCompile Include="Settings.cpp" />
     <ClCompile Include="Register.cpp" />
     <ClCompile Include="ClassFactory.cpp" />
     <ClCompile Include="TextService.cpp" />
@@ -183,6 +184,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Globals.h" />
+    <ClInclude Include="SettingsResource.h" />
     <ClInclude Include="Register.h" />
     <ClInclude Include="ClassFactory.h" />
     <ClInclude Include="TextService.h" />
@@ -199,7 +201,19 @@
   <ItemGroup>
     <ResourceCompile Include="NomIME.rc" />
   </ItemGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ItemGroup>
+    <RuntimeData Include="$(ProjectDir)..\data\nom_dict_single.tsv;$(ProjectDir)..\data\nom_dict_word.tsv;$(ProjectDir)..\data\NomKeyboardSerif.ttf;$(ProjectDir)..\data\CandidateFont-LICENSE.txt" />
+  </ItemGroup>
+  <Target Name="CopyRuntimeData" AfterTargets="Build">
+    <Copy SourceFiles="@(RuntimeData)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>

@@ -42,6 +42,9 @@
     <ClCompile Include="DllMain.cpp">
       <Filter>Source Files\Core</Filter>
     </ClCompile>
+    <ClCompile Include="Settings.cpp">
+      <Filter>Source Files\Core</Filter>
+    </ClCompile>
     <ClCompile Include="Register.cpp">
       <Filter>Source Files\Core</Filter>
     </ClCompile>
@@ -75,6 +78,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Globals.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="SettingsResource.h">
       <Filter>Header Files\Core</Filter>
     </ClInclude>
     <ClInclude Include="Register.h">

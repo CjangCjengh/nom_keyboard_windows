@@ -1,175 +1,151 @@
-; NomIME NSIS Installer Script
-; Generates setup.exe for Nom Keyboard
-
+; Nom Keyboard TSF installer
+Unicode true
 !include "MUI2.nsh"
 !include "x64.nsh"
 !include "LogicLib.nsh"
-
+!include "FileFunc.nsh"
 !ifndef SOLUTION_DIR
     !define SOLUTION_DIR ".."
 !endif
+!define ARP "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard"
+!define LEGACY_TIP "SOFTWARE\Microsoft\CTF\TIP\{7A8B9C0D-1E2F-3A4B-5C6D-7E8F9A0B1C2D}"
 
 Name "Nom Keyboard"
 OutFile "NomKeyboardSetup.exe"
-Unicode true
 RequestExecutionLevel admin
 InstallDir "$PROGRAMFILES\NomKeyboard"
-
-VIProductVersion "1.0.0.0"
+InstallDirRegKey HKLM "${ARP}" "InstallLocation"
+AllowSkipFiles off
+VIProductVersion "1.1.4.0"
 VIAddVersionKey "ProductName" "Nom Keyboard"
 VIAddVersionKey "FileDescription" "Nom Keyboard IME Installer"
-VIAddVersionKey "FileVersion" "1.0.0.0"
-VIAddVersionKey "ProductVersion" "1.0.0.0"
-VIAddVersionKey "LegalCopyright" "Copyright (C) 2025 Nom Keyboard Project"
+VIAddVersionKey "FileVersion" "1.1.4.0"
+VIAddVersionKey "LegalCopyright" "Copyright (C) Nom Keyboard Project"
 
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TITLE "Welcome to Nom Keyboard Setup"
-!define MUI_WELCOMEPAGE_TEXT "This wizard will install Nom Keyboard - a Han Nom input method for Windows."
-!define MUI_FINISHPAGE_TEXT "Nom Keyboard has been installed.$\n$\nIf upgrading, you may need to restart your computer for the new version to take effect."
-
+!define MUI_FINISHPAGE_TEXT "Nom Keyboard is ready. Select the Vietnamese keyboard with Win+Space. To change input preferences, open Nom Keyboard Settings from Start."
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
-
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
-
 !insertmacro MUI_LANGUAGE "English"
+!include "FileUse.nsh"
 
-Var NeedReboot
+Function .onInit
+    ; v1.0 wrote only a quoted UninstallString. Reuse its custom installation
+    ; directory so upgrading does not strand an old DLL and uninstaller.
+    ReadRegStr $0 HKLM "${ARP}" "InstallLocation"
+    ${If} $0 == ""
+        ReadRegStr $0 HKLM "${ARP}" "UninstallString"
+        StrCpy $1 $0 1
+        ${If} $1 == '$\"'
+            StrCpy $0 $0 -1 1
+        ${EndIf}
+        ${GetFileName} "$0" $1
+        ${If} $1 == "uninstall.exe"
+        ${AndIf} ${FileExists} "$0"
+            ${GetParent} "$0" $INSTDIR
+        ${EndIf}
+    ${EndIf}
+FunctionEnd
 
-Section "Nom Keyboard" SecMain
-    SectionIn RO
+!macro RegisterDLL TOOL SWITCH DLL
+    ${Do}
+        ClearErrors
+        StrCpy $0 -1
+        ExecWait '"${TOOL}" /s ${SWITCH} "$INSTDIR\${DLL}"' $0
+        ${IfNot} ${Errors}
+        ${AndIf} $0 = 0
+            ${ExitDo}
+        ${EndIf}
+        MessageBox MB_RETRYCANCEL|MB_ICONSTOP "Registration command failed for ${DLL} (code $0). See the setup details." /SD IDCANCEL IDRETRY +3
+        SetErrorLevel 1
+        Abort
+    ${Loop}
+!macroend
+
+!macro RegisterBoth SWITCH
+    ${If} ${RunningX64}
+        ${If} ${FileExists} "$INSTDIR\NomIME64.dll"
+            !insertmacro RegisterDLL "$WINDIR\Sysnative\regsvr32.exe" "${SWITCH}" "NomIME64.dll"
+        ${EndIf}
+    ${EndIf}
+    ${If} ${FileExists} "$INSTDIR\NomIME32.dll"
+        !insertmacro RegisterDLL "$SYSDIR\regsvr32.exe" "${SWITCH}" "NomIME32.dll"
+    ${EndIf}
+!macroend
+
+Section "Nom Keyboard"
     SetOutPath "$INSTDIR"
-    StrCpy $NeedReboot "0"
-
-    ; Unregister old TIP profiles if upgrading.
-    ; NOTE: we intentionally do NOT `regsvr32 /u` the previously installed DLL.
-    ; Versions <= 1.0 used CLSID {7A8B9C0D-1E2F-3A4B-5C6D-7E8F9A0B1C2D}, which
-    ; collides with a built-in Win11 class (PrintSupportEnterpriseManagementUIEventArgsFactory).
-    ; Calling DllUnregisterServer on that old DLL would delete HKCR\CLSID\{7A8B...},
-    ; i.e. the SYSTEM print-support class -- so we delete only the TIP profile
-    ; keys here (safe) and let regsvr32 (re)register the new CLSID below.
-    ; Old (colliding) CLSID -- legacy cleanup, both registry views:
-    ExecWait 'reg delete "HKLM\SOFTWARE\Microsoft\CTF\TIP\{7A8B9C0D-1E2F-3A4B-5C6D-7E8F9A0B1C2D}" /f'
-    ExecWait 'reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\CTF\TIP\{7A8B9C0D-1E2F-3A4B-5C6D-7E8F9A0B1C2D}" /f'
-    ; Current CLSID (keep in sync with NomIME\Globals.h CLSID_NomTextService):
-    ExecWait 'reg delete "HKLM\SOFTWARE\Microsoft\CTF\TIP\{FF82830D-8CF7-4DBF-8C03-6380E2BB655F}" /f'
-    ExecWait 'reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\CTF\TIP\{FF82830D-8CF7-4DBF-8C03-6380E2BB655F}" /f'
-
-    ; Gently stop ctfmon and TextInputHost (not explorer!)
-    ExecWait 'cmd /c taskkill /f /im ctfmon.exe 2>nul'
-    ExecWait 'cmd /c taskkill /f /im TextInputHost.exe 2>nul'
-    Sleep 800
-
-    ; Try to copy DLLs. Use /r flag (overwrite) with retry.
-    ; If the file is still locked, NSIS will use the built-in overwrite retry.
-    SetOverwrite try
-    ClearErrors
-    File /oname=NomIME64.dll "${SOLUTION_DIR}\bin\Release\x64\NomIME.dll"
-    IfErrors 0 ok64
-        ; File locked (explorer etc still holds it) - schedule replace on reboot
-        SetOutPath "$INSTDIR"
-        Rename "$INSTDIR\NomIME64.dll" "$INSTDIR\NomIME64.dll.old"
+    !insertmacro WaitForFile "" "NomIME64.dll"
+    !insertmacro WaitForFile "" "NomIME32.dll"
+    ; Only remove the legacy TIP, never the colliding system COM class.
+    ${If} ${RunningX64}
+        SetRegView 64
+        DeleteRegKey HKLM "${LEGACY_TIP}"
+        SetRegView 32
         File /oname=NomIME64.dll "${SOLUTION_DIR}\bin\Release\x64\NomIME.dll"
-        IfErrors 0 ok64
-            ; Still locked - use temp file + reboot replace
-            File /oname=NomIME64.dll.new "${SOLUTION_DIR}\bin\Release\x64\NomIME.dll"
-            Delete /REBOOTOK "$INSTDIR\NomIME64.dll"
-            Rename "$INSTDIR\NomIME64.dll.new" "$INSTDIR\NomIME64.dll"
-            StrCpy $NeedReboot "1"
-    ok64:
-
-    ClearErrors
+    ${EndIf}
+    DeleteRegKey HKLM "${LEGACY_TIP}"
     File /oname=NomIME32.dll "${SOLUTION_DIR}\bin\Release\Win32\NomIME.dll"
-    IfErrors 0 ok32
-        Rename "$INSTDIR\NomIME32.dll" "$INSTDIR\NomIME32.dll.old"
-        File /oname=NomIME32.dll "${SOLUTION_DIR}\bin\Release\Win32\NomIME.dll"
-        IfErrors 0 ok32
-            File /oname=NomIME32.dll.new "${SOLUTION_DIR}\bin\Release\Win32\NomIME.dll"
-            Delete /REBOOTOK "$INSTDIR\NomIME32.dll"
-            Rename "$INSTDIR\NomIME32.dll.new" "$INSTDIR\NomIME32.dll"
-            StrCpy $NeedReboot "1"
-    ok32:
-
-    ; Dictionary data (these are never locked)
-    SetOverwrite on
     File "${SOLUTION_DIR}\data\nom_dict_single.tsv"
     File "${SOLUTION_DIR}\data\nom_dict_word.tsv"
+    File "${SOLUTION_DIR}\data\NomKeyboardSerif.ttf"
+    File "${SOLUTION_DIR}\data\CandidateFont-LICENSE.txt"
 
     WriteUninstaller "$INSTDIR\uninstall.exe"
-
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard" "DisplayName" "Nom Keyboard"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard" "DisplayVersion" "1.0.0.0"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard" "Publisher" "Nom Keyboard Project"
-    WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard" "NoModify" 1
-    WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard" "NoRepair" 1
-
-    WriteRegDWORD HKCU "Software\NomKeyboard" "ToneStyleOld" 0
-    WriteRegDWORD HKCU "Software\NomKeyboard" "ShorthandEnabled" 1
-    WriteRegDWORD HKCU "Software\NomKeyboard" "SegmentMode" 1
-
-    ; Register new DLLs
+    WriteRegStr HKLM "${ARP}" "DisplayName" "Nom Keyboard"
+    WriteRegStr HKLM "${ARP}" "InstallLocation" "$INSTDIR"
+    WriteRegStr HKLM "${ARP}" "UninstallString" '$\"$INSTDIR\uninstall.exe$\"'
+    WriteRegStr HKLM "${ARP}" "DisplayVersion" "1.1.4"
+    WriteRegStr HKLM "${ARP}" "Publisher" "Nom Keyboard Project"
+    WriteRegDWORD HKLM "${ARP}" "NoModify" 1
+    WriteRegDWORD HKLM "${ARP}" "NoRepair" 1
+    !insertmacro RegisterBoth ""
+    Delete "$INSTDIR\NomNaTong-Regular.ttf"
+    Delete "$INSTDIR\NomNaTong-LICENSE.txt"
+    SetShellVarContext all
     ${If} ${RunningX64}
-        ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\NomIME64.dll"'
-        ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s "$INSTDIR\NomIME32.dll"'
+        CreateShortcut "$SMPROGRAMS\Nom Keyboard Settings.lnk" "$WINDIR\SysWOW64\rundll32.exe" '"$INSTDIR\NomIME32.dll",NomKeyboardSettings'
     ${Else}
-        ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\NomIME32.dll"'
+        CreateShortcut "$SMPROGRAMS\Nom Keyboard Settings.lnk" "$SYSDIR\rundll32.exe" '"$INSTDIR\NomIME32.dll",NomKeyboardSettings'
     ${EndIf}
-
-    ; Restart ctfmon (NOT explorer)
-    Exec '"$SYSDIR\ctfmon.exe"'
-
-    ; Clean up old files if rename succeeded
-    Delete "$INSTDIR\NomIME64.dll.old"
-    Delete "$INSTDIR\NomIME32.dll.old"
-
-    ; If reboot needed, tell the user
-    StrCmp $NeedReboot "1" 0 done
-        MessageBox MB_YESNO "Some files were in use. A reboot is needed to complete the update.$\n$\nRestart now?" IDYES reboot_now
-        Goto done
-    reboot_now:
-        Reboot
-    done:
-
 SectionEnd
 
+!macro RemoveFile NAME
+    ${DoWhile} ${FileExists} "$INSTDIR\${NAME}"
+        ClearErrors
+        Delete "$INSTDIR\${NAME}"
+        ${If} ${Errors}
+            StrCpy $LockPath "$INSTDIR\${NAME}"
+            Call un.FindLockOwners
+            DetailPrint "Could not remove $LockPath. $LockOwners"
+            MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Could not remove $LockPath. Close the application using it and retry.$\r$\n$LockOwners" /SD IDCANCEL IDRETRY +3
+            SetErrorLevel 32
+            Abort
+        ${EndIf}
+    ${Loop}
+!macroend
+
 Section "Uninstall"
-
-    ${If} ${RunningX64}
-        ExecWait '"$SYSDIR\regsvr32.exe" /u /s "$INSTDIR\NomIME64.dll"'
-        ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /u /s "$INSTDIR\NomIME32.dll"'
-    ${Else}
-        ExecWait '"$SYSDIR\regsvr32.exe" /u /s "$INSTDIR\NomIME32.dll"'
-    ${EndIf}
-
-    ExecWait 'cmd /c taskkill /f /im ctfmon.exe 2>nul'
-    ExecWait 'cmd /c taskkill /f /im TextInputHost.exe 2>nul'
-    Sleep 800
-
-    Delete /REBOOTOK "$INSTDIR\NomIME64.dll"
-    Delete /REBOOTOK "$INSTDIR\NomIME32.dll"
-    Delete "$INSTDIR\NomIME64.dll.old"
-    Delete "$INSTDIR\NomIME32.dll.old"
-    Delete "$INSTDIR\NomIME64.dll.new"
-    Delete "$INSTDIR\NomIME32.dll.new"
-    Delete "$INSTDIR\nom_dict_single.tsv"
-    Delete "$INSTDIR\nom_dict_word.tsv"
+    ; Unregister first so new applications stop loading the DLL while we wait.
+    !insertmacro RegisterBoth "/u"
+    !insertmacro RemoveFile "NomIME64.dll"
+    !insertmacro RemoveFile "NomIME32.dll"
+    !insertmacro RemoveFile "NomIME64.dll.old"
+    !insertmacro RemoveFile "NomIME32.dll.old"
+    !insertmacro RemoveFile "NomIME64.dll.new"
+    !insertmacro RemoveFile "NomIME32.dll.new"
+    !insertmacro RemoveFile "nom_dict_single.tsv"
+    !insertmacro RemoveFile "nom_dict_word.tsv"
+    !insertmacro RemoveFile "NomKeyboardSerif.ttf"
+    !insertmacro RemoveFile "CandidateFont-LICENSE.txt"
+    SetShellVarContext all
+    Delete "$SMPROGRAMS\Nom Keyboard Settings.lnk"
+    DeleteRegKey HKLM "${ARP}"
+    DeleteRegKey HKCU "Software\NomKeyboard"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"
-
-    DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\NomKeyboard"
-    DeleteRegKey HKCU "Software\NomKeyboard"
-
-    Exec '"$SYSDIR\ctfmon.exe"'
-
-    IfRebootFlag 0 un_done
-        MessageBox MB_YESNO "Some files were in use. A reboot is needed to complete removal.$\n$\nRestart now?" IDYES un_reboot
-        Goto un_done
-    un_reboot:
-        Reboot
-    un_done:
-
 SectionEnd

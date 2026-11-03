@@ -16,48 +16,23 @@ BOOL RegisterServer() {
     std::wstring keyPath = c_szInfoKeyPrefix;
     keyPath += pszCLSID;
 
-    HKEY hKey = nullptr;
-    DWORD dw;
-    if (RegCreateKeyExW(HKEY_CLASSES_ROOT, keyPath.c_str(), 0, NULL,
-        REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, &dw) != ERROR_SUCCESS)
-    {
-        CoTaskMemFree(pszCLSID);
-        return FALSE;
-    }
-    RegSetValueExW(hKey, NULL, 0, REG_SZ, (const BYTE*)TEXTSERVICE_DESC_EN,
-        (DWORD)(wcslen(TEXTSERVICE_DESC_EN) + 1) * sizeof(wchar_t));
-
-    HKEY hSubKey = nullptr;
-    if (RegCreateKeyExW(hKey, c_szInProcSvr32, 0, NULL,
-        REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hSubKey, &dw) == ERROR_SUCCESS)
-    {
-        RegSetValueExW(hSubKey, NULL, 0, REG_SZ, (const BYTE*)szModule,
-            (DWORD)(wcslen(szModule) + 1) * sizeof(wchar_t));
-        RegSetValueExW(hSubKey, c_szModelName, 0, REG_SZ, (const BYTE*)TEXTSERVICE_MODEL,
-            (DWORD)(wcslen(TEXTSERVICE_MODEL) + 1) * sizeof(wchar_t));
-        RegCloseKey(hSubKey);
-    }
-    RegCloseKey(hKey);
     CoTaskMemFree(pszCLSID);
-    return TRUE;
+    auto write = [](const std::wstring& path, const wchar_t* name, const wchar_t* value) {
+        return RegSetKeyValueW(HKEY_CLASSES_ROOT, path.c_str(), name, REG_SZ, value,
+            static_cast<DWORD>((wcslen(value) + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
+    };
+    const std::wstring server = keyPath + L"\\" + c_szInProcSvr32;
+    return write(keyPath, nullptr, TEXTSERVICE_DESC_EN) && write(server, nullptr, szModule) &&
+        write(server, c_szModelName, TEXTSERVICE_MODEL);
 }
 
 BOOL UnregisterServer() {
-    LPOLESTR pszCLSID = nullptr;
-    if (FAILED(StringFromCLSID(CLSID_NomTextService, &pszCLSID))) return FALSE;
-
-    std::wstring keyPath = c_szInfoKeyPrefix;
-    keyPath += pszCLSID;
-    keyPath += L"\\" + std::wstring(c_szInProcSvr32);
-
-    RegDeleteKeyW(HKEY_CLASSES_ROOT, keyPath.c_str());
-
-    keyPath = c_szInfoKeyPrefix;
-    keyPath += pszCLSID;
-    RegDeleteKeyW(HKEY_CLASSES_ROOT, keyPath.c_str());
-
-    CoTaskMemFree(pszCLSID);
-    return TRUE;
+    LPOLESTR clsid = nullptr;
+    if (FAILED(StringFromCLSID(CLSID_NomTextService, &clsid))) return FALSE;
+    const std::wstring path = std::wstring(c_szInfoKeyPrefix) + clsid;
+    CoTaskMemFree(clsid);
+    LSTATUS result = RegDeleteTreeW(HKEY_CLASSES_ROOT, path.c_str());
+    return result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND || result == ERROR_PATH_NOT_FOUND;
 }
 
 BOOL RegisterProfiles() {
