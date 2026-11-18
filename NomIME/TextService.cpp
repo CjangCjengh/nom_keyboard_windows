@@ -14,15 +14,36 @@ public:
     enum Action { SET_COMPOSING, COMMIT_TEXT, END_COMPOSITION, READ_LAYOUT };
 
     EditSession(NomTextService* pService, ITfContext* pContext, Action action,
-        const std::wstring& text = L"")
+        const std::wstring& text = L"", ITfComposition* compositionToEnd = nullptr)
         : refCount_(1), service_(pService), context_(pContext),
-        action_(action), text_(text)
+        action_(action), text_(text), generation_(service_->compositionGeneration_),
+        compositionToEnd_(compositionToEnd)
     {
         service_->AddRef();
         context_->AddRef();
+        if (compositionToEnd_) {
+            compositionToEnd_->AddRef();
+            ++service_->pendingCompositionEnds_;
+        }
     }
 
-    ~EditSession() { SafeRelease(context_); service_->Release(); }
+    ~EditSession() {
+        if (compositionToEnd_) {
+            compositionToEnd_->Release();
+            --service_->pendingCompositionEnds_;
+        }
+        SafeRelease(context_);
+        service_->Release();
+    }
+
+    HRESULT RequestWrite() {
+        // Writes must run after any queued end so that a new composition can
+        // start even if the caret has already moved back into the old range.
+        DWORD access = service_->pendingCompositionEnds_ ? TF_ES_ASYNC : TF_ES_ASYNCDONTCARE;
+        HRESULT result = E_FAIL;
+        HRESULT hr = context_->RequestEditSession(service_->clientId_, this, access | TF_ES_READWRITE, &result);
+        return FAILED(hr) ? hr : result;
+    }
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppvObj) override {
         if (!ppvObj) return E_INVALIDARG;
@@ -52,6 +73,7 @@ public:
             }
             break;
         case SET_COMPOSING: {
+            if (generation_ != service_->compositionGeneration_) break;
             // Start or update composition
             if (!service_->composition_) {
                 ITfInsertAtSelection* pInsert = nullptr;
@@ -66,6 +88,7 @@ public:
                             pContextComp->StartComposition(ec, pRange,
                                 service_, &service_->composition_);
                             pContextComp->Release();
+                            if (service_->composition_) service_->WatchComposition(context_);
                         }
                         // Set cursor at end
                         pRange->Collapse(ec, TF_ANCHOR_END);
@@ -103,7 +126,7 @@ public:
                     pRange->SetText(ec, 0, text_.c_str(), (LONG)text_.size());
                     pRange->Collapse(ec, TF_ANCHOR_END);
                     service_->composition_->EndComposition(ec);
-                    SafeRelease(service_->composition_);
+                    service_->ReleaseComposition();
                     pRange->Release();
                 }
             }
@@ -119,9 +142,10 @@ public:
             break;
         }
         case END_COMPOSITION: {
+            if (compositionToEnd_) return compositionToEnd_->EndComposition(ec);
             if (service_->composition_) {
                 service_->composition_->EndComposition(ec);
-                SafeRelease(service_->composition_);
+                service_->ReleaseComposition();
             }
             break;
         }
@@ -135,6 +159,8 @@ private:
     ITfContext* context_;
     Action action_;
     std::wstring text_;
+    unsigned generation_;
+    ITfComposition* compositionToEnd_;
 };
 
 // ---- Constructor / Destructor ----
@@ -271,6 +297,7 @@ void NomTextService::SetKeyboardOpen(BOOL open) {
 }
 
 STDMETHODIMP NomTextService::Deactivate() {
+    ++compositionGeneration_;
     // Remove key event sink
     ITfKeystrokeMgr* pKeystrokeMgr = nullptr;
     if (SUCCEEDED(threadMgr_->QueryInterface(IID_ITfKeystrokeMgr, (void**)&pKeystrokeMgr))) {
@@ -299,7 +326,7 @@ STDMETHODIMP NomTextService::Deactivate() {
         candidateWindow_ = nullptr;
     }
 
-    SafeRelease(composition_);
+    ReleaseComposition();
     SafeRelease(threadMgr_);
     clientId_ = TF_CLIENTID_NULL;
 
@@ -509,23 +536,14 @@ STDMETHODIMP NomTextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPAR
             commitText += std::wstring(chars, result);
         }
 
-        // Clear state
-        composing_.clear();
-        lockedPrefix_.clear();
-        lockedHistory_.clear();
-        currentCandidates_.clear();
-        currentCandidateConsumed_.clear();
-        shorthandActive_ = false;
-        shorthandSegments_.clear();
+        ClearComposingState();
         NgramModel::Instance().ResetContext();
-        HideCandidates();
 
         // Commit everything in one shot
         if (!commitText.empty()) {
             EditSession* pSession = new EditSession(this, pContext,
                 EditSession::COMMIT_TEXT, commitText);
-            HRESULT hr;
-            pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+            pSession->RequestWrite();
             pSession->Release();
         }
         *pfEaten = TRUE;
@@ -548,15 +566,11 @@ STDMETHODIMP NomTextService::OnPreservedKey(ITfContext* pContext, REFGUID rguid,
 // ---- ITfCompositionSink ----
 
 STDMETHODIMP NomTextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfComposition* pComposition) {
-    SafeRelease(composition_);
-    composing_.clear();
-    lockedPrefix_.clear();
-    shorthandActive_ = false;
-    shorthandSegments_.clear();
-    lastWasStandaloneW_ = false;
-    currentCandidates_.clear();
-    currentCandidateConsumed_.clear();
-    HideCandidates();
+    if (pComposition == composition_) {
+        ++compositionGeneration_;
+        ReleaseComposition();
+        ClearComposingState();
+    }
     return S_OK;
 }
 
@@ -565,8 +579,88 @@ STDMETHODIMP NomTextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfCo
 STDMETHODIMP NomTextService::OnInitDocumentMgr(ITfDocumentMgr* pDocMgr) { return S_OK; }
 STDMETHODIMP NomTextService::OnUninitDocumentMgr(ITfDocumentMgr* pDocMgr) { return S_OK; }
 STDMETHODIMP NomTextService::OnSetFocus(ITfDocumentMgr* pDocMgrFocus, ITfDocumentMgr* pDocMgrPrevFocus) {
-    // Focus changed to a different document/app: hide candidates and reset
-    HideCandidates();
+    ++compositionGeneration_;
+    ReleaseComposition();
+    ClearComposingState();
+    return S_OK;
+}
+STDMETHODIMP NomTextService::OnPushContext(ITfContext* pContext) { return S_OK; }
+STDMETHODIMP NomTextService::OnPopContext(ITfContext* pContext) {
+    if (pContext == compositionContext_) {
+        ++compositionGeneration_;
+        ReleaseComposition();
+        ClearComposingState();
+    } else if (pContext == candidateContext_) {
+        HideCandidates();
+    }
+    return S_OK;
+}
+
+// ---- ITfTextEditSink ----
+
+STDMETHODIMP NomTextService::OnEndEdit(ITfContext* pContext, TfEditCookie ecReadOnly,
+    ITfEditRecord* pEditRecord) {
+    if (!pEditRecord || pContext != compositionContext_ || !composition_ ||
+        (composing_.empty() && lockedPrefix_.empty())) return S_OK;
+
+    BOOL selectionChanged = FALSE;
+    if (FAILED(pEditRecord->GetSelectionStatus(&selectionChanged)) || !selectionChanged) return S_OK;
+
+    TF_SELECTION selection{};
+    ULONG fetched = 0;
+    if (FAILED(pContext->GetSelection(ecReadOnly, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) ||
+        fetched != 1) return S_OK;
+
+    ITfRange* range = nullptr;
+    LONG start = 0, end = 0;
+    bool outside = SUCCEEDED(composition_->GetRange(&range)) &&
+        SUCCEEDED(selection.range->CompareStart(ecReadOnly, range, TF_ANCHOR_START, &start)) &&
+        SUCCEEDED(selection.range->CompareEnd(ecReadOnly, range, TF_ANCHOR_END, &end)) &&
+        (start < 0 || end > 0);
+    SafeRelease(range);
+    selection.range->Release();
+    if (!outside) return S_OK;
+
+    // Finish the text in place while leaving the caret where the editor moved it.
+    // OnEndEdit only has a read cookie. Queue the end for this exact composition
+    // and detach it so the next key starts with a fresh buffer.
+    auto* session = new (std::nothrow) EditSession(this, pContext, EditSession::END_COMPOSITION, L"", composition_);
+    if (!session) return E_OUTOFMEMORY;
+    HRESULT hr = session->RequestWrite();
+    session->Release();
+    if (SUCCEEDED(hr)) {
+        ++compositionGeneration_;
+        ReleaseComposition();
+        ClearComposingState();
+        NgramModel::Instance().ResetContext();
+    }
+    return S_OK;
+}
+
+void NomTextService::WatchComposition(ITfContext* context) {
+    compositionContext_ = context;
+    compositionContext_->AddRef();
+    ITfSource* source = nullptr;
+    if (SUCCEEDED(context->QueryInterface(IID_PPV_ARGS(&source)))) {
+        source->AdviseSink(IID_ITfTextEditSink, static_cast<ITfTextEditSink*>(this), &textEditSinkCookie_);
+        source->Release();
+    }
+}
+
+void NomTextService::ReleaseComposition() {
+    if (textEditSinkCookie_ != TF_INVALID_COOKIE) {
+        ITfSource* source = nullptr;
+        if (SUCCEEDED(compositionContext_->QueryInterface(IID_PPV_ARGS(&source)))) {
+            source->UnadviseSink(textEditSinkCookie_);
+            source->Release();
+        }
+        textEditSinkCookie_ = TF_INVALID_COOKIE;
+    }
+    SafeRelease(compositionContext_);
+    SafeRelease(composition_);
+}
+
+void NomTextService::ClearComposingState() {
     composing_.clear();
     lockedPrefix_.clear();
     lockedHistory_.clear();
@@ -575,24 +669,7 @@ STDMETHODIMP NomTextService::OnSetFocus(ITfDocumentMgr* pDocMgrFocus, ITfDocumen
     shorthandActive_ = false;
     shorthandSegments_.clear();
     lastWasStandaloneW_ = false;
-    if (composition_) {
-        // We can't end composition here without an edit cookie.
-        // Just release our reference; the framework will clean up.
-        SafeRelease(composition_);
-    }
-    return S_OK;
-}
-STDMETHODIMP NomTextService::OnPushContext(ITfContext* pContext) { return S_OK; }
-STDMETHODIMP NomTextService::OnPopContext(ITfContext* pContext) {
-    if (pContext == candidateContext_) HideCandidates();
-    return S_OK;
-}
-
-// ---- ITfTextEditSink ----
-
-STDMETHODIMP NomTextService::OnEndEdit(ITfContext* pContext, TfEditCookie ecReadOnly,
-    ITfEditRecord* pEditRecord) {
-    return S_OK;
+    HideCandidates();
 }
 
 // Keep a layout subscription only for the editor which owns the candidate list.
@@ -711,8 +788,7 @@ void NomTextService::OnChar(ITfContext* pContext, wchar_t ch) {
     // Update composing text in the editor
     EditSession* pSession = new EditSession(this, pContext,
         EditSession::SET_COMPOSING, display);
-    HRESULT hr;
-    pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+    pSession->RequestWrite();
     pSession->Release();
 }
 
@@ -732,14 +808,9 @@ void NomTextService::OnBackspace(ITfContext* pContext) {
         // Nothing left, end composition
         EditSession* pSession = new EditSession(this, pContext,
             EditSession::END_COMPOSITION);
-        HRESULT hr;
-        pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+        pSession->RequestWrite();
         pSession->Release();
-        currentCandidates_.clear();
-        currentCandidateConsumed_.clear();
-        shorthandActive_ = false;
-        shorthandSegments_.clear();
-        HideCandidates();
+        ClearComposingState();
         return;
     }
 
@@ -752,8 +823,7 @@ void NomTextService::OnBackspace(ITfContext* pContext) {
 
     EditSession* pSession = new EditSession(this, pContext,
         EditSession::SET_COMPOSING, display);
-    HRESULT hr;
-    pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+    pSession->RequestWrite();
     pSession->Release();
 }
 
@@ -789,8 +859,7 @@ void NomTextService::OnSpace(ITfContext* pContext) {
 
     EditSession* pSession = new EditSession(this, pContext,
         EditSession::SET_COMPOSING, display);
-    HRESULT hr;
-    pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+    pSession->RequestWrite();
     pSession->Release();
 }
 
@@ -799,18 +868,10 @@ void NomTextService::OnEnter(ITfContext* pContext) {
 }
 
 void NomTextService::OnEscape(ITfContext* pContext) {
-    composing_.clear();
-    lockedPrefix_.clear();
-    lockedHistory_.clear();
-    currentCandidates_.clear();
-    currentCandidateConsumed_.clear();
-    shorthandActive_ = false;
-    shorthandSegments_.clear();
-    HideCandidates();
+    ClearComposingState();
 
     EditSession* pSession = new EditSession(this, pContext, EditSession::END_COMPOSITION);
-    HRESULT hr;
-    pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+    pSession->RequestWrite();
     pSession->Release();
 }
 
@@ -851,19 +912,11 @@ void NomTextService::PickCandidate(ITfContext* pContext, int idx) {
         // Feed the committed Nom into the n-gram model
         ObserveNgramForCommit(commitText);
 
-        composing_.clear();
-        lockedPrefix_.clear();
-        lockedHistory_.clear();
-        currentCandidates_.clear();
-        currentCandidateConsumed_.clear();
-        shorthandActive_ = false;
-        shorthandSegments_.clear();
-        HideCandidates();
+        ClearComposingState();
 
         EditSession* pSession = new EditSession(this, pContext,
             EditSession::COMMIT_TEXT, commitText);
-        HRESULT hr;
-        pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+        pSession->RequestWrite();
         pSession->Release();
     }
     else {
@@ -889,8 +942,7 @@ void NomTextService::PickCandidate(ITfContext* pContext, int idx) {
 
         EditSession* pSession = new EditSession(this, pContext,
             EditSession::SET_COMPOSING, display);
-        HRESULT hr;
-        pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+        pSession->RequestWrite();
         pSession->Release();
     }
 }
@@ -927,30 +979,13 @@ void NomTextService::CommitComposing(ITfContext* pContext, bool appendTrailingSp
         if (text.empty()) text = L" ";
         else if (text.back() != L' ') text += L' ';
     }
-    if (text.empty()) {
-        EditSession* pSession = new EditSession(this, pContext, EditSession::END_COMPOSITION);
-        HRESULT hr;
-        pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
-        pSession->Release();
-    }
-    else {
-        EditSession* pSession = new EditSession(this, pContext,
-            EditSession::COMMIT_TEXT, text);
-        HRESULT hr;
-        pContext->RequestEditSession(clientId_, pSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
-        pSession->Release();
-    }
+    auto action = text.empty() ? EditSession::END_COMPOSITION : EditSession::COMMIT_TEXT;
+    EditSession* pSession = new EditSession(this, pContext, action, text);
+    pSession->RequestWrite();
+    pSession->Release();
 
-    composing_.clear();
-    lockedPrefix_.clear();
-    lockedHistory_.clear();
-    currentCandidates_.clear();
-    currentCandidateConsumed_.clear();
-    shorthandActive_ = false;
-    shorthandSegments_.clear();
-    lastWasStandaloneW_ = false;
+    ClearComposingState();
     NgramModel::Instance().ResetContext();
-    HideCandidates();
 }
 
 // ---- Candidate gathering ----

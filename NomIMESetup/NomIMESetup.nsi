@@ -16,10 +16,10 @@ RequestExecutionLevel admin
 InstallDir "$PROGRAMFILES\NomKeyboard"
 InstallDirRegKey HKLM "${ARP}" "InstallLocation"
 AllowSkipFiles off
-VIProductVersion "1.1.4.0"
+VIProductVersion "1.1.5.0"
 VIAddVersionKey "ProductName" "Nom Keyboard"
 VIAddVersionKey "FileDescription" "Nom Keyboard IME Installer"
-VIAddVersionKey "FileVersion" "1.1.4.0"
+VIAddVersionKey "FileVersion" "1.1.5.0"
 VIAddVersionKey "LegalCopyright" "Copyright (C) Nom Keyboard Project"
 
 !define MUI_ABORTWARNING
@@ -99,7 +99,7 @@ Section "Nom Keyboard"
     WriteRegStr HKLM "${ARP}" "DisplayName" "Nom Keyboard"
     WriteRegStr HKLM "${ARP}" "InstallLocation" "$INSTDIR"
     WriteRegStr HKLM "${ARP}" "UninstallString" '$\"$INSTDIR\uninstall.exe$\"'
-    WriteRegStr HKLM "${ARP}" "DisplayVersion" "1.1.4"
+    WriteRegStr HKLM "${ARP}" "DisplayVersion" "1.1.5"
     WriteRegStr HKLM "${ARP}" "Publisher" "Nom Keyboard Project"
     WriteRegDWORD HKLM "${ARP}" "NoModify" 1
     WriteRegDWORD HKLM "${ARP}" "NoRepair" 1

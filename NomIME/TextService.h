@@ -75,6 +75,9 @@ private:
     HRESULT StartComposition(ITfContext* pContext);
     HRESULT EndComposition(ITfContext* pContext);
     HRESULT SetComposingText(ITfContext* pContext, const std::wstring& text);
+    void WatchComposition(ITfContext* context);
+    void ReleaseComposition();
+    void ClearComposingState();
 
     // Viết tắt (abbreviated input) support
     struct ShorthandSegments {
@@ -101,6 +104,9 @@ private:
     DWORD threadMgrSinkCookie_;
     DWORD textEditSinkCookie_;
     ITfComposition* composition_;
+    ITfContext* compositionContext_ = nullptr;
+    unsigned compositionGeneration_ = 0;
+    unsigned pendingCompositionEnds_ = 0;
     ITfContext* candidateContext_ = nullptr;
     DWORD layoutCookie_ = TF_INVALID_COOKIE;
     bool layoutReadPending_ = false;

@@ -599,6 +599,8 @@ std::wstring TelexEngine::Apply(const std::wstring& composing, wchar_t ch, bool 
 
     // 1a. W key
     if (ch == L'w' || ch == L'W') {
+        // A literal w already ended the Telex sequence (e.g. ww -> w).
+        if (composing.back() == L'w' || composing.back() == L'W') return composing + ch;
         std::wstring rewritten = RewriteHornForW(composing, ch == L'W');
         if (!rewritten.empty()) return rewritten;
         return composing + (ch == L'W' ? L'Ư' : L'ư');
@@ -702,6 +704,7 @@ bool TelexEngine::IsValidVietnameseSyllableShape(const std::wstring& ascii) {
 
 bool TelexEngine::WouldBeStandaloneW(const std::wstring& tail, wchar_t ch) {
     if (ch != L'w' && ch != L'W') return false;
+    if (!tail.empty() && (tail.back() == L'w' || tail.back() == L'W')) return false;
     // Locate the start of the trailing letter run (== current syllable).
     size_t start = tail.size();
     for (size_t i = tail.size(); i-- > 0; ) {
